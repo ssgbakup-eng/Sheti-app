@@ -39,15 +39,14 @@ jobs:
           rm -rf android
           flutter create . --platforms=android
 
-      - name: Build APK
+      - name: Build ARM64 APK
         run: |
           cd "$PROJECT_DIR"
           flutter pub get
-          flutter build apk --release
-          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/Sheti-release.apk"
+          flutter build apk --release --split-per-abi
 
-      - name: Upload APK
+      - name: Upload Samsung S24 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-APK
-          path: Sheti-release.apk
+          name: Sheti-S24-APK
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
