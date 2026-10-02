@@ -26,26 +26,29 @@ jobs:
           rm -rf source
           mkdir source
           unzip -q Sheti_App_V2.zip -d source
+
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
+
           if [ -z "$PROJECT_DIR" ]; then
             echo "pubspec.yaml not found"
             exit 1
           fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-  - name: Prepare Android
-  run: |
-    cd "$PROJECT_DIR"
-    rm -rf android
-    flutter create . --platforms=android
-    sed -i '/<manifest /a\    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' android/app/src/main/AndroidManifest.xml
 
-- name: Build ARM64 APK
-  run: |
-    cd "$PROJECT_DIR"
-    flutter pub get
-    flutter build apk --release --split-per-abi
-      
-      
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Prepare Android
+        run: |
+          cd "$PROJECT_DIR"
+          rm -rf android
+          flutter create . --platforms=android
+
+          sed -i '/<manifest /a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' android/app/src/main/AndroidManifest.xml
+
+      - name: Build ARM64 APK
+        run: |
+          cd "$PROJECT_DIR"
+          flutter pub get
+          flutter build apk --release --split-per-abi
 
       - name: Upload Samsung S24 APK
         uses: actions/upload-artifact@v4
