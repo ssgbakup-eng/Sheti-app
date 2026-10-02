@@ -21,7 +21,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract Sheti project
+      - name: Extract Sheti V2
         run: |
           rm -rf source
           mkdir source
@@ -39,15 +39,21 @@ jobs:
       - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
+
           rm -rf android
+
           flutter create . --platforms=android
+
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' android/app/build.gradle.kts
 
           sed -i '/<manifest /a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' android/app/src/main/AndroidManifest.xml
 
       - name: Build ARM64 APK
         run: |
           cd "$PROJECT_DIR"
+
           flutter pub get
+
           flutter build apk --release --split-per-abi
 
       - name: Upload Samsung S24 APK
