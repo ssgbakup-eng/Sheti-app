@@ -25,7 +25,7 @@ jobs:
         run: |
           rm -rf source
           mkdir source
-          unzip -q Sheti_App_BuildReady.zip -d source
+          unzip -q Sheti_App_V2.zip -d source
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
           if [ -z "$PROJECT_DIR" ]; then
             echo "pubspec.yaml not found"
@@ -33,12 +33,7 @@ jobs:
           fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Prepare Android
-        run: |
-          cd "$PROJECT_DIR"
-          rm -rf android
-          flutter create . --platforms=android
-
+      
       - name: Build ARM64 APK
         run: |
           cd "$PROJECT_DIR"
