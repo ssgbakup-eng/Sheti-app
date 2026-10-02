@@ -1,0 +1,40 @@
+name: Build Sheti APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.2'
+          channel: stable
+
+      - name: Extract Sheti project
+        run: |
+          unzip -q Sheti_App_BuildReady.zip -d source
+          cd source/sheti_app
+          rm -rf android
+          flutter create . --platforms=android --org com.sheti
+
+      - name: Build APK
+        working-directory: source/sheti_app
+        run: |
+          flutter pub get
+          flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sheti-APK
+          path: source/sheti_app/build/app/outputs/flutter-apk/app-release.apk
