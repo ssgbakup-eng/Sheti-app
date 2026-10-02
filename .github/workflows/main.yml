@@ -19,22 +19,35 @@ jobs:
         with:
           flutter-version: '3.35.2'
           channel: stable
+          cache: true
 
       - name: Extract Sheti project
         run: |
+          rm -rf source
+          mkdir source
           unzip -q Sheti_App_BuildReady.zip -d source
-          cd source/sheti_app
+          PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "pubspec.yaml not found"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Prepare Android
+        run: |
+          cd "$PROJECT_DIR"
           rm -rf android
-          flutter create . --platforms=android --org com.sheti
+          flutter create . --platforms=android
 
       - name: Build APK
-        working-directory: source/sheti_app
         run: |
+          cd "$PROJECT_DIR"
           flutter pub get
           flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/Sheti-release.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Sheti-APK
-          path: source/sheti_app/build/app/outputs/flutter-apk/app-release.apk
+          path: Sheti-release.apk
