@@ -1,43 +1,3 @@
-
-name: Build Sheti V3 APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.35.2'
-          channel: stable
-          cache: true
-
-      - name: Extract Sheti V3
-        run: |
-          rm -rf source
-          mkdir source
-
-          unzip -q Sheti_App_V3.zip -d source
-
-          PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "pubspec.yaml not found"
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
       - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
@@ -55,25 +15,8 @@ jobs:
           permission = '    <uses-permission android:name="android.permission.RECORD_AUDIO"/>'
 
           if 'android.permission.RECORD_AUDIO' not in s:
-              s = s.replace(
-                  '<manifest',
-                  '<manifest\n' + permission,
-                  1
-              )
+              pos = s.find('>')
+              s = s[:pos + 1] + '\n' + permission + s[pos + 1:]
 
           p.write_text(s)
           PY
-
-      - name: Build Samsung S24 ARM64 APK
-        run: |
-          cd "$PROJECT_DIR"
-
-          flutter pub get
-
-          flutter build apk --release --split-per-abi
-
-      - name: Upload Samsung S24 APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Sheti-V3-S24-APK
-          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
