@@ -1,4 +1,4 @@
-name: Build Sheti APK
+name: Build Sheti V3 APK
 
 on:
   workflow_dispatch:
@@ -21,11 +21,12 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract Sheti V2 Fixed
+      - name: Extract Sheti V3
         run: |
           rm -rf source
           mkdir source
-          unzip -q Sheti_App_V2_FIXED.zip -d source
+
+          unzip -q Sheti_App_V3.zip -d source
 
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
 
@@ -39,19 +40,23 @@ jobs:
       - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
+
           rm -rf android
+
           flutter create . --platforms=android
 
-          sed -i '/<manifest /a\    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' android/app/src/main/AndroidManifest.xml
+          sed -i '/<manifest /a\    <uses-permission android:name="android.permission.RECORD_AUDIO"/' android/app/src/main/AndroidManifest.xml
 
-      - name: Build ARM64 APK
+      - name: Build Samsung S24 ARM64 APK
         run: |
           cd "$PROJECT_DIR"
+
           flutter pub get
+
           flutter build apk --release --split-per-abi
 
       - name: Upload Samsung S24 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-S24-APK
+          name: Sheti-V3-S24-APK
           path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
