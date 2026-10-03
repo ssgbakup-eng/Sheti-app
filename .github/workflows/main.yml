@@ -1,3 +1,4 @@
+
 name: Build Sheti V3 APK
 
 on:
@@ -45,7 +46,23 @@ jobs:
 
           flutter create . --platforms=android
 
-          sed -i '/<manifest /a\    <uses-permission android:name="android.permission.RECORD_AUDIO"/' android/app/src/main/AndroidManifest.xml
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+
+          permission = '    <uses-permission android:name="android.permission.RECORD_AUDIO"/>'
+
+          if 'android.permission.RECORD_AUDIO' not in s:
+              s = s.replace(
+                  '<manifest',
+                  '<manifest\n' + permission,
+                  1
+              )
+
+          p.write_text(s)
+          PY
 
       - name: Build Samsung S24 ARM64 APK
         run: |
