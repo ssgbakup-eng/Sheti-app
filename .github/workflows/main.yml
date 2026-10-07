@@ -1,5 +1,5 @@
 
-name: Build Sheti V3 APK
+name: Build Sheti V16 APK
 
 on:
   workflow_dispatch:
