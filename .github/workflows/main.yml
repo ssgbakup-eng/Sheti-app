@@ -57,5 +57,5 @@ jobs:
       - name: Upload Samsung S24 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V3-S24-APK
+          name: Sheti-V16-S24-APK
           path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
