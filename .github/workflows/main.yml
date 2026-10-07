@@ -1,10 +1,7 @@
-
-name: Build Sheti V16 APK
+name: Build Sheti V17 APK
 
 on:
   workflow_dispatch:
-  
-  
 
 jobs:
   build:
@@ -21,7 +18,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract Sheti V3
+      - name: Extract Sheti V4.16
         run: |
           rm -rf source
           mkdir source
@@ -35,6 +32,7 @@ jobs:
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Prepare Android
         run: |
@@ -44,18 +42,70 @@ jobs:
 
           flutter create . --platforms=android
 
-          sed -i '/<application/i\    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' android/app/src/main/AndroidManifest.xml
+          echo "Applying Sheti release signing configuration..."
+
+          mkdir -p android/signing
+
+          cp signing/sheti-release.jks \
+             android/signing/sheti-release.jks
+
+          cp signing/key.properties \
+             android/signing/key.properties
+
+          cp signing/app_build.gradle \
+             android/app/build.gradle
+
+          echo "Signing files applied."
+
+      - name: Verify Android Configuration
+        run: |
+          cd "$PROJECT_DIR"
+
+          echo "Checking application ID..."
+          grep -n "applicationId" android/app/build.gradle
+
+          echo "Checking version..."
+          grep -n "versionCode" android/app/build.gradle
+          grep -n "versionName" android/app/build.gradle
+
+          echo "Checking release signing..."
+          grep -n "signingConfig signingConfigs.release" android/app/build.gradle
+
+          echo "Checking keystore..."
+          test -f android/signing/sheti-release.jks
+
+          echo "Checking key.properties..."
+          test -f android/signing/key.properties
+
+          echo "Android configuration verified."
 
       - name: Build Samsung S24 ARM64 APK
         run: |
           cd "$PROJECT_DIR"
 
+          flutter clean
           flutter pub get
 
-          flutter build apk --release --split-per-abi
+          flutter build apk \
+            --release \
+            --split-per-abi
 
-      - name: Upload Samsung S24 APK
+      - name: Verify APK
+        run: |
+          cd "$PROJECT_DIR"
+
+          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ARM64 APK not found"
+            exit 1
+          fi
+
+          echo "APK found:"
+          ls -lh "$APK"
+
+      - name: Upload Sheti V17 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V16-S24-APK
+          name: Sheti-V17-S24-APK
           path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
