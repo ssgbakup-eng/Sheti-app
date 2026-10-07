@@ -18,11 +18,11 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract Sheti V4.16
+      - name: Extract Sheti V17
         run: |
           rm -rf source
           mkdir source
-          unzip -q Sheti_V4_16.zip -d source
+          unzip -q Sheti_V4_17.zip -d source
 
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
 
@@ -42,8 +42,6 @@ jobs:
 
           flutter create . --platforms=android
 
-          echo "Applying Sheti release signing configuration..."
-
           mkdir -p android/signing
 
           cp signing/sheti-release.jks \
@@ -55,29 +53,27 @@ jobs:
           cp signing/app_build.gradle \
              android/app/build.gradle
 
-          echo "Signing files applied."
+          echo "Release signing configuration applied."
 
       - name: Verify Android Configuration
         run: |
           cd "$PROJECT_DIR"
 
-          echo "Checking application ID..."
+          echo "Application ID:"
           grep -n "applicationId" android/app/build.gradle
 
-          echo "Checking version..."
+          echo "Version:"
           grep -n "versionCode" android/app/build.gradle
           grep -n "versionName" android/app/build.gradle
 
-          echo "Checking release signing..."
+          echo "Release signing:"
           grep -n "signingConfig signingConfigs.release" android/app/build.gradle
 
-          echo "Checking keystore..."
+          echo "Checking signing files..."
           test -f android/signing/sheti-release.jks
-
-          echo "Checking key.properties..."
           test -f android/signing/key.properties
 
-          echo "Android configuration verified."
+          echo "Configuration verification PASSED."
 
       - name: Build Samsung S24 ARM64 APK
         run: |
@@ -101,7 +97,7 @@ jobs:
             exit 1
           fi
 
-          echo "APK found:"
+          echo "APK successfully created:"
           ls -lh "$APK"
 
       - name: Upload Sheti V17 APK
