@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -22,6 +23,7 @@ jobs:
         run: |
           rm -rf source
           mkdir source
+
           unzip -q Sheti_V4_18.zip -d source
 
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
@@ -32,6 +34,9 @@ jobs:
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
 
       - name: Prepare Android
         run: |
@@ -49,6 +54,9 @@ jobs:
           cp signing/key.properties \
              android/signing/key.properties
 
+          echo "Android project prepared."
+          echo "Signing files copied."
+
       - name: Configure Android Release Signing
         run: |
           cd "$PROJECT_DIR"
@@ -63,7 +71,8 @@ jobs:
           import java.util.Properties
 
           def signingProperties = new Properties()
-          def signingPropertiesFile = rootProject.file("signing/key.properties")
+          def signingPropertiesFile =
+              rootProject.file("signing/key.properties")
 
           if (signingPropertiesFile.exists()) {
               signingPropertiesFile.withInputStream {
@@ -77,8 +86,18 @@ jobs:
               compileSdk flutter.compileSdkVersion
               ndkVersion flutter.ndkVersion
 
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
               defaultConfig {
                   applicationId "com.example.sheti_app"
+
                   minSdk 23
                   targetSdk flutter.targetSdkVersion
 
@@ -92,9 +111,15 @@ jobs:
                           storeFile rootProject.file(
                               signingProperties["storeFile"]
                           )
-                          storePassword signingProperties["storePassword"]
-                          keyAlias signingProperties["keyAlias"]
-                          keyPassword signingProperties["keyPassword"]
+
+                          storePassword =
+                              signingProperties["storePassword"]
+
+                          keyAlias =
+                              signingProperties["keyAlias"]
+
+                          keyPassword =
+                              signingProperties["keyPassword"]
                       }
                   }
               }
@@ -111,33 +136,40 @@ jobs:
           }
           EOF
 
-          echo "Android release signing configured."
+          echo "Release signing + JVM 17 configuration applied."
 
       - name: Verify Configuration
         run: |
           cd "$PROJECT_DIR"
 
-          echo "Checking Package ID..."
+          echo "===== PACKAGE ====="
           grep "applicationId" android/app/build.gradle
 
-          echo "Checking Version..."
+          echo "===== VERSION ====="
           grep "versionCode" android/app/build.gradle
           grep "versionName" android/app/build.gradle
 
-          echo "Checking Release Signing..."
+          echo "===== JAVA 17 ====="
+          grep "JavaVersion.VERSION_17" android/app/build.gradle
+
+          echo "===== KOTLIN 17 ====="
+          grep "jvmTarget = \"17\"" android/app/build.gradle
+
+          echo "===== RELEASE SIGNING ====="
           grep "signingConfig signingConfigs.release" android/app/build.gradle
 
-          echo "Checking signing files..."
+          echo "===== SIGNING FILES ====="
           test -f android/signing/sheti-release.jks
           test -f android/signing/key.properties
 
-          echo "Configuration PASSED."
+          echo "ALL CONFIGURATION CHECKS PASSED."
 
       - name: Build Samsung S24 ARM64 APK
         run: |
           cd "$PROJECT_DIR"
 
           flutter clean
+
           flutter pub get
 
           flutter build apk \
@@ -151,11 +183,11 @@ jobs:
           APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ARM64 APK not found"
+            echo "ARM64 APK NOT FOUND"
             exit 1
           fi
 
-          echo "V18 APK created successfully:"
+          echo "===== V18 APK CREATED ====="
           ls -lh "$APK"
 
       - name: Upload Sheti V18 APK
