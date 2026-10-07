@@ -32,7 +32,6 @@ jobs:
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
 
       - name: Prepare Android
         run: |
@@ -50,30 +49,140 @@ jobs:
           cp signing/key.properties \
              android/signing/key.properties
 
-          cp signing/app_build.gradle \
-             android/app/build.gradle
+          echo "Android project created successfully."
 
-          echo "Release signing configuration applied."
-
-      - name: Verify Android Configuration
+      - name: Configure Release Signing
         run: |
           cd "$PROJECT_DIR"
 
-          echo "Application ID:"
-          grep -n "applicationId" android/app/build.gradle
+          python3 - <<'PY'
+          from pathlib import Path
 
-          echo "Version:"
-          grep -n "versionCode" android/app/build.gradle
-          grep -n "versionName" android/app/build.gradle
+          gradle = Path("android/app/build.gradle")
 
-          echo "Release signing:"
-          grep -n "signingConfig signingConfigs.release" android/app/build.gradle
+          if not gradle.exists():
+              gradle = Path("android/app/build.gradle.kts")
 
-          echo "Checking signing files..."
+          if not gradle.exists():
+              raise SystemExit("Android app Gradle file not found")
+
+          s = gradle.read_text()
+
+          # Add signing properties
+          if "signing/key.properties" not in s:
+              header = '''
+          import java.util.Properties
+
+          val signingProperties = Properties()
+          val signingPropertiesFile = rootProject.file("signing/key.properties")
+
+          if (signingPropertiesFile.exists()) {
+              signingPropertiesFile.inputStream().use {
+                  signingProperties.load(it)
+              }
+          }
+
+          '''
+              s = header + s
+
+          # Kotlin DSL
+          if gradle.name == "build.gradle.kts":
+              if "signingConfigs" not in s:
+                  s = s.replace(
+                      "android {",
+                      '''android {
+              signingConfigs {
+                  create("release") {
+                      if (signingPropertiesFile.exists()) {
+                          storeFile = rootProject.file(signingProperties["storeFile"] as String)
+                          storePassword = signingProperties["storePassword"] as String
+                          keyAlias = signingProperties["keyAlias"] as String
+                          keyPassword = signingProperties["keyPassword"] as String
+                      }
+                  }
+              }
+          ''',
+                      1
+                  )
+
+              s = s.replace(
+                  "signingConfig = signingConfigs.getByName(\"debug\")",
+                  "signingConfig = signingConfigs.getByName(\"release\")"
+              )
+
+              if "signingConfig = signingConfigs.getByName(\"release\")" not in s:
+                  s = s.replace(
+                      "buildTypes {",
+                      '''buildTypes {
+                  release {
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+          ''',
+                      1
+                  )
+
+          # Groovy DSL
+          else:
+              if "signingConfigs" not in s:
+                  s = s.replace(
+                      "android {",
+                      '''android {
+              signingConfigs {
+                  release {
+                      if (signingPropertiesFile.exists()) {
+                          storeFile rootProject.file(signingProperties['storeFile'])
+                          storePassword signingProperties['storePassword']
+                          keyAlias signingProperties['keyAlias']
+                          keyPassword signingProperties['keyPassword']
+                      }
+                  }
+              }
+          ''',
+                      1
+                  )
+
+              if "signingConfig signingConfigs.release" not in s:
+                  s = s.replace(
+                      "buildTypes {",
+                      '''buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+          ''',
+                      1
+                  )
+
+          gradle.write_text(s)
+
+          print("Configured:", gradle)
+          PY
+
+      - name: Set Version 17
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i 's/versionCode = .*/versionCode = 17/' android/app/build.gradle.kts
+            sed -i 's/versionName = .*/versionName = "4.1.3"/' android/app/build.gradle.kts
+          elif [ -f android/app/build.gradle ]; then
+            sed -i 's/versionCode .*/versionCode 17/' android/app/build.gradle
+            sed -i 's/versionName .*/versionName "4.1.3"/' android/app/build.gradle
+          fi
+
+      - name: Verify Configuration
+        run: |
+          cd "$PROJECT_DIR"
+
           test -f android/signing/sheti-release.jks
           test -f android/signing/key.properties
 
-          echo "Configuration verification PASSED."
+          echo "Signing files:"
+          ls -lh android/signing/
+
+          echo "Android Gradle files:"
+          ls -lh android/app/
+
+          echo "Configuration check PASSED."
 
       - name: Build Samsung S24 ARM64 APK
         run: |
@@ -92,12 +201,9 @@ jobs:
 
           APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
 
-          if [ ! -f "$APK" ]; then
-            echo "ARM64 APK not found"
-            exit 1
-          fi
+          test -f "$APK"
 
-          echo "APK successfully created:"
+          echo "V17 APK created successfully:"
           ls -lh "$APK"
 
       - name: Upload Sheti V17 APK
