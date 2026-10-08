@@ -24,7 +24,7 @@ jobs:
           rm -rf source
           mkdir source
 
-          unzip -q Sheti_V4_20_फिक्स्ड2.zip -d source
+          unzip -q Sheti_V4_20_FIXED2.zip -d source
 
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
 
