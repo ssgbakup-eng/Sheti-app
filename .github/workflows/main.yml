@@ -1,4 +1,4 @@
-name: Build Sheti V19 APK
+name: Build Sheti V20 APK
 
 on:
   workflow_dispatch:
@@ -19,12 +19,11 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract Sheti V19
+      - name: Extract Sheti V20
         run: |
           rm -rf source
           mkdir source
-
-          unzip -q Sheti_V4_19.zip -d source
+          unzip -q Sheti_V4_20.zip -d source
 
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
 
@@ -71,6 +70,7 @@ jobs:
           import java.util.Properties
 
           def signingProperties = new Properties()
+
           def signingPropertiesFile =
               rootProject.file("signing/key.properties")
 
@@ -101,8 +101,8 @@ jobs:
                   minSdk 23
                   targetSdk flutter.targetSdkVersion
 
-                  versionCode 19
-                  versionName "4.1.5"
+                  versionCode 20
+                  versionName "4.1.6"
               }
 
               signingConfigs {
@@ -136,7 +136,7 @@ jobs:
           }
           EOF
 
-          echo "Release signing + JVM 17 configuration applied."
+          echo "Release signing configured."
 
       - name: Verify Configuration
         run: |
@@ -153,10 +153,11 @@ jobs:
           grep "JavaVersion.VERSION_17" android/app/build.gradle
 
           echo "===== KOTLIN 17 ====="
-          grep "jvmTarget = \"17\"" android/app/build.gradle
+          grep 'jvmTarget = "17"' android/app/build.gradle
 
           echo "===== RELEASE SIGNING ====="
-          grep "signingConfig signingConfigs.release" android/app/build.gradle
+          grep "signingConfig signingConfigs.release" \
+              android/app/build.gradle
 
           echo "===== SIGNING FILES ====="
           test -f android/signing/sheti-release.jks
@@ -175,7 +176,7 @@ jobs:
             --release \
             --split-per-abi
 
-      - name: Verify APK
+      - name: Verify V20 APK
         run: |
           cd "$PROJECT_DIR"
 
@@ -186,11 +187,11 @@ jobs:
             exit 1
           fi
 
-          echo "===== V19 APK CREATED ====="
+          echo "===== V20 APK CREATED ====="
           ls -lh "$APK"
 
-      - name: Upload Sheti V19 APK
+      - name: Upload Sheti V20 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V19-S24-APK
+          name: Sheti-V20-S24-APK
           path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
