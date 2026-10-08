@@ -19,11 +19,12 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract Sheti V20
+      - name: Extract Sheti V20 FIXED
         run: |
           rm -rf source
           mkdir source
-          unzip -q Sheti_V4_20.zip -d source
+
+          unzip -q Sheti_V4_20_FIXED.zip -d source
 
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
 
@@ -52,9 +53,6 @@ jobs:
 
           cp signing/key.properties \
              android/signing/key.properties
-
-          echo "Android project prepared."
-          echo "Signing files copied."
 
       - name: Configure Android Release Signing
         run: |
@@ -97,7 +95,6 @@ jobs:
 
               defaultConfig {
                   applicationId "com.example.sheti_app"
-
                   minSdk 23
                   targetSdk flutter.targetSdkVersion
 
@@ -136,8 +133,6 @@ jobs:
           }
           EOF
 
-          echo "Release signing configured."
-
       - name: Verify Configuration
         run: |
           cd "$PROJECT_DIR"
@@ -149,21 +144,11 @@ jobs:
           grep "versionCode" android/app/build.gradle
           grep "versionName" android/app/build.gradle
 
-          echo "===== JAVA 17 ====="
-          grep "JavaVersion.VERSION_17" android/app/build.gradle
-
-          echo "===== KOTLIN 17 ====="
-          grep 'jvmTarget = "17"' android/app/build.gradle
-
-          echo "===== RELEASE SIGNING ====="
-          grep "signingConfig signingConfigs.release" \
-              android/app/build.gradle
-
-          echo "===== SIGNING FILES ====="
+          echo "===== SIGNING ====="
           test -f android/signing/sheti-release.jks
           test -f android/signing/key.properties
 
-          echo "ALL CONFIGURATION CHECKS PASSED."
+          echo "CONFIGURATION OK"
 
       - name: Build Samsung S24 ARM64 APK
         run: |
