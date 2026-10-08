@@ -1,4 +1,4 @@
-name: Build Sheti V18 APK
+name: Build Sheti V19 APK
 
 on:
   workflow_dispatch:
@@ -19,12 +19,12 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract Sheti V18
+      - name: Extract Sheti V19
         run: |
           rm -rf source
           mkdir source
 
-          unzip -q Sheti_V4_18.zip -d source
+          unzip -q Sheti_V4_19.zip -d source
 
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
 
@@ -101,8 +101,8 @@ jobs:
                   minSdk 23
                   targetSdk flutter.targetSdkVersion
 
-                  versionCode 18
-                  versionName "4.1.4"
+                  versionCode 19
+                  versionName "4.1.5"
               }
 
               signingConfigs {
@@ -169,7 +169,6 @@ jobs:
           cd "$PROJECT_DIR"
 
           flutter clean
-
           flutter pub get
 
           flutter build apk \
@@ -187,11 +186,11 @@ jobs:
             exit 1
           fi
 
-          echo "===== V18 APK CREATED ====="
+          echo "===== V19 APK CREATED ====="
           ls -lh "$APK"
 
-      - name: Upload Sheti V18 APK
+      - name: Upload Sheti V19 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V18-S24-APK
+          name: Sheti-V19-S24-APK
           path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
