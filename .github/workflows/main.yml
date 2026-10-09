@@ -1,4 +1,4 @@
-name: Build Sheti V20 APK
+name: Build Sheti V21 APK
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -19,12 +18,11 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract Sheti V20 FIXED
+      - name: Extract Sheti V21
         run: |
           rm -rf source
           mkdir source
-
-          unzip -q Sheti_V4_20_FIXED2.zip -d source
+          unzip -q Sheti_V4_21.zip -d source
 
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
 
@@ -35,30 +33,21 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Project directory:"
-          echo "$PROJECT_DIR"
-
       - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
-
           rm -rf android
-
           flutter create . --platforms=android
 
           mkdir -p android/signing
+          cp signing/sheti-release.jks android/signing/sheti-release.jks
+          cp signing/key.properties android/signing/key.properties
 
-          cp signing/sheti-release.jks \
-             android/signing/sheti-release.jks
-
-          cp signing/key.properties \
-             android/signing/key.properties
-
-      - name: Configure Android Release Signing
+      - name: Configure Android Signing
         run: |
           cd "$PROJECT_DIR"
 
-          cat > android/app/build.gradle <<'EOF'
+          cat > android/app/build.gradle <<'GRADLE'
           plugins {
               id "com.android.application"
               id "org.jetbrains.kotlin.android"
@@ -68,19 +57,16 @@ jobs:
           import java.util.Properties
 
           def signingProperties = new Properties()
+          def signingFile = rootProject.file("signing/key.properties")
 
-          def signingPropertiesFile =
-              rootProject.file("signing/key.properties")
-
-          if (signingPropertiesFile.exists()) {
-              signingPropertiesFile.withInputStream {
+          if (signingFile.exists()) {
+              signingFile.withInputStream {
                   signingProperties.load(it)
               }
           }
 
           android {
               namespace "com.example.sheti_app"
-
               compileSdk flutter.compileSdkVersion
               ndkVersion flutter.ndkVersion
 
@@ -97,27 +83,16 @@ jobs:
                   applicationId "com.example.sheti_app"
                   minSdk 23
                   targetSdk flutter.targetSdkVersion
-
-                  versionCode 20
-                  versionName "4.1.6"
+                  versionCode 21
+                  versionName "4.1.7"
               }
 
               signingConfigs {
                   release {
-                      if (signingPropertiesFile.exists()) {
-                          storeFile rootProject.file(
-                              signingProperties["storeFile"]
-                          )
-
-                          storePassword =
-                              signingProperties["storePassword"]
-
-                          keyAlias =
-                              signingProperties["keyAlias"]
-
-                          keyPassword =
-                              signingProperties["keyPassword"]
-                      }
+                      storeFile rootProject.file(signingProperties["storeFile"])
+                      storePassword signingProperties["storePassword"]
+                      keyAlias signingProperties["keyAlias"]
+                      keyPassword signingProperties["keyPassword"]
                   }
               }
 
@@ -131,52 +106,17 @@ jobs:
           flutter {
               source "../.."
           }
-          EOF
+          GRADLE
 
-      - name: Verify Configuration
+      - name: Build V21 APK
         run: |
           cd "$PROJECT_DIR"
-
-          echo "===== PACKAGE ====="
-          grep "applicationId" android/app/build.gradle
-
-          echo "===== VERSION ====="
-          grep "versionCode" android/app/build.gradle
-          grep "versionName" android/app/build.gradle
-
-          echo "===== SIGNING ====="
-          test -f android/signing/sheti-release.jks
-          test -f android/signing/key.properties
-
-          echo "CONFIGURATION OK"
-
-      - name: Build Samsung S24 ARM64 APK
-        run: |
-          cd "$PROJECT_DIR"
-
           flutter clean
           flutter pub get
+          flutter build apk --release --split-per-abi
 
-          flutter build apk \
-            --release \
-            --split-per-abi
-
-      - name: Verify V20 APK
-        run: |
-          cd "$PROJECT_DIR"
-
-          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ARM64 APK NOT FOUND"
-            exit 1
-          fi
-
-          echo "===== V20 APK CREATED ====="
-          ls -lh "$APK"
-
-      - name: Upload Sheti V20 APK
+      - name: Upload V21 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V20-S24-APK
+          name: Sheti-V21-S24-APK
           path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
