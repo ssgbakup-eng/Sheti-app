@@ -1,7 +1,11 @@
-name: Build Sheti V24 APK
+
+name: Sheti App V25 APK Build
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -11,155 +15,153 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Check V25 ZIP
+        run: |
+          test -f Sheti_V4_25.zip || {
+            echo "ERROR: Sheti_V4_25.zip not found in repository root"
+            exit 1
+          }
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.2'
+          flutter-version: "3.35.2"
           channel: stable
           cache: true
 
-      - name: Extract V24 Source
-        shell: bash
+      - name: Extract V25 Source
         run: |
-          set -euo pipefail
+          mkdir -p source project
+          unzip -q Sheti_V4_25.zip -d source
 
-          test -f Sheti_V4_24.zip
-          rm -rf source
-          mkdir -p source
-          unzip -q Sheti_V4_24.zip -d source
-
-          PUBSPEC="$(find source -type f -name pubspec.yaml -print -quit)"
-          test -n "$PUBSPEC"
-
-          PROJECT_DIR="$(dirname "$PUBSPEC")"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Prepare Android
-        shell: bash
+      - name: Create Android Project
         run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
+          flutter create \
+            --platforms=android \
+            --org com.example \
+            --project-name sheti_app \
+            project
 
-          test -f pubspec.yaml
-          test -d lib
-          test -f signing/key.properties
-          test -f signing/sheti-release.jks
+          cp source/pubspec.yaml project/pubspec.yaml
+          rm -rf project/lib
+          cp -r source/lib project/lib
 
-          flutter create . --platforms=android --org com.example
+          if [ -d source/assets ]; then
+            cp -r source/assets project/assets
+          fi
 
-          mkdir -p android/signing
-          cp signing/key.properties android/signing/key.properties
-          cp signing/sheti-release.jks android/signing/sheti-release.jks
+          mkdir -p project/android/signing
+          cp source/signing/sheti-release.jks \
+            project/android/signing/
+          cp source/signing/key.properties \
+            project/android/signing/
 
       - name: Configure Release Signing
+        working-directory: project
         shell: bash
         run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-          cat > android/app/build.gradle <<'GRADLE'
-          plugins {
-              id "com.android.application"
-              id "org.jetbrains.kotlin.android"
-              id "dev.flutter.flutter-gradle-plugin"
-          }
+          p = Path("android/app/build.gradle")
+          s = p.read_text()
 
+          if "signing/key.properties" not in s:
+              prefix = """
           import java.util.Properties
 
-          def props = new Properties()
-          def propsFile = rootProject.file("signing/key.properties")
+          """
+              marker = re.search(
+                  r"(?m)^plugins\\s*\\{.*?^\\}",
+                  s,
+                  re.S
+              )
+              if not marker:
+                  raise SystemExit("Gradle plugins block not found")
 
-          if (!propsFile.exists()) {
-              throw new GradleException("Signing properties missing")
+              config = """
+          def signingProperties = new Properties()
+          def signingFile = rootProject.file("signing/key.properties")
+          if (!signingFile.exists()) {
+              throw new GradleException("Signing key properties missing")
+          }
+          signingFile.withInputStream {
+              signingProperties.load(it)
           }
 
-          propsFile.withInputStream { props.load(it) }
+          """
+              s = prefix + s
+              marker = re.search(
+                  r"(?m)^plugins\\s*\\{.*?^\\}",
+                  s,
+                  re.S
+              )
+              s = s[:marker.end()] + "\\n" + config + s[marker.end():]
 
-          android {
-              namespace "com.example.sheti_app"
-              compileSdk flutter.compileSdkVersion
-              ndkVersion flutter.ndkVersion
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-
-              defaultConfig {
-                  applicationId "com.example.sheti_app"
-                  minSdk 23
-                  targetSdk flutter.targetSdkVersion
-                  versionCode 24
-                  versionName "4.2.0"
-              }
-
+          if "signingConfigs {" not in s:
+              block = """
               signingConfigs {
                   release {
-                      storeFile rootProject.file(props["storeFile"])
-                      storePassword props["storePassword"]
-                      keyAlias props["keyAlias"]
-                      keyPassword props["keyPassword"]
+                      storeFile rootProject.file(
+                          signingProperties.getProperty("storeFile")
+                      )
+                      storePassword signingProperties.getProperty("storePassword")
+                      keyAlias signingProperties.getProperty("keyAlias")
+                      keyPassword signingProperties.getProperty("keyPassword")
                   }
               }
 
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.release
-                  }
-              }
-          }
+          """
+              s, count = re.subn(
+                  r"(?m)^\\s*buildTypes\\s*\\{",
+                  block + "    buildTypes {",
+                  s,
+                  count=1
+              )
+              if count != 1:
+                  raise SystemExit("Gradle buildTypes block not found")
 
-          flutter {
-              source "../.."
-          }
-          GRADLE
+          s, count = re.subn(
+              r"signingConfig\\s*=\\s*signingConfigs\\.debug",
+              "signingConfig = signingConfigs.release",
+              s
+          )
 
-      - name: Verify Configuration
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
+          if count == 0 and "signingConfigs.release" not in s:
+              raise SystemExit("Release signing configuration not applied")
 
-          grep -F 'applicationId "com.example.sheti_app"' android/app/build.gradle
-          grep -F 'versionCode 24' android/app/build.gradle
-          grep -F 'versionName "4.2.0"' android/app/build.gradle
-
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          ET.parse("android/app/src/main/AndroidManifest.xml")
-          print("Manifest XML valid")
+          p.write_text(s)
           PY
 
       - name: Get Dependencies
+        working-directory: project
         run: |
-          cd "$PROJECT_DIR"
+          flutter clean
           flutter pub get
 
-      - name: Build Samsung S24 APK
+      - name: Build Release APK
+        working-directory: project
         run: |
-          cd "$PROJECT_DIR"
-          flutter clean
-          flutter build apk --release --split-per-abi
+          flutter build apk \
+            --release \
+            --split-per-abi
 
-      - name: Verify APK
+      - name: Rename ARM64 APK
+        working-directory: project
         run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-          test -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-          ls -lh build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+            ../Sheti_V4_25_ARM64.apk
 
-      - name: Upload V24 APK
+      - name: Upload V25 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V24-S24-APK
-          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          name: Sheti-V25-APK
+          path: Sheti_V4_25_ARM64.apk
           if-no-files-found: error
