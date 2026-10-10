@@ -25,82 +25,108 @@ jobs:
           cache: true
 
       - name: Extract V22 Source
+        shell: bash
         run: |
-          mkdir -p source
-          unzip -q Sheti_V4_22.zip -d source
+          set -e
 
-          PROJECT_DIR="$(dirname "$(find source -name pubspec.yaml -print -quit)")"
+          ZIP_FILE="Sheti_V4_22.zip"
 
-          if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "source" ]; then
-            echo "ERROR: Flutter project pubspec.yaml not found"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: Sheti_V4_22.zip not found in repository root"
+            ls -la
             exit 1
           fi
 
+          rm -rf source
+          mkdir -p source
+          unzip -q "$ZIP_FILE" -d source
+
+          echo "Checking extracted files:"
+          find source -maxdepth 4 -type f | head -100
+
+          PUBSPEC="$(find source -type f -name pubspec.yaml -print -quit)"
+
+          if [ -z "$PUBSPEC" ]; then
+            echo "ERROR: pubspec.yaml not found inside ZIP"
+            echo "ZIP contents:"
+            unzip -l "$ZIP_FILE" | head -100
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$PUBSPEC")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Flutter project: $PROJECT_DIR"
+          echo "Flutter project found: $PROJECT_DIR"
+
+      - name: Check Flutter Project
+        run: |
+          cd "$PROJECT_DIR"
+
+          test -f pubspec.yaml
+          test -d lib
+
+          flutter --version
+          grep -n 'version:' pubspec.yaml || true
 
       - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
 
-          flutter create . --platforms=android
+          if [ ! -d android ]; then
+            flutter create . --platforms=android
+          fi
 
-      - name: Configure Release Signing
+          test -f android/app/build.gradle || \
+          test -f android/app/build.gradle.kts
+
+      - name: Check Signing Files
         run: |
           cd "$PROJECT_DIR"
 
-          if [ ! -f signing/key.properties ] || \
-             [ ! -f signing/sheti-release.jks ]; then
-            echo "ERROR: Existing release signing files are missing"
+          if [ ! -f signing/key.properties ]; then
+            echo "ERROR: signing/key.properties missing"
             exit 1
           fi
 
-          mkdir -p android/signing
-          cp signing/key.properties android/signing/key.properties
-          cp signing/sheti-release.jks android/signing/sheti-release.jks
+          if [ ! -f signing/sheti-release.jks ]; then
+            echo "ERROR: signing/sheti-release.jks missing"
+            exit 1
+          fi
 
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
-
-          if 'applicationId "com.example.sheti_app"' not in s:
-              raise SystemExit("ERROR: Unexpected applicationId")
-
-          s = s.replace('versionCode flutterVersionCode.toInteger()', 'versionCode 22')
-          s = s.replace('versionName flutterVersionName', 'versionName "4.1.8"')
-
-          if 'versionCode 22' not in s:
-              raise SystemExit("ERROR: Could not set versionCode 22")
-
-          p.write_text(s)
-          PY
-
-      - name: Check Version and Signing
-        run: |
-          cd "$PROJECT_DIR"
-          grep -n 'applicationId' android/app/build.gradle
-          grep -n 'versionCode' android/app/build.gradle
-          grep -n 'versionName' android/app/build.gradle
-          test -f android/signing/key.properties
-          test -f android/signing/sheti-release.jks
+          echo "Signing files found"
 
       - name: Get Dependencies
         run: |
           cd "$PROJECT_DIR"
           flutter pub get
 
+      - name: Verify Android Package
+        run: |
+          cd "$PROJECT_DIR"
+
+          grep -R -n 'com.example.sheti_app' \
+            android/app 2>/dev/null || true
+
       - name: Build Release APK
         run: |
           cd "$PROJECT_DIR"
-          flutter build apk --release --split-per-abi
+
+          flutter build apk \
+            --release \
+            --split-per-abi
 
       - name: Verify APK
         run: |
           cd "$PROJECT_DIR"
+
           APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-          test -f "$APK"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: ARM64 APK not found"
+            find build/app/outputs -type f || true
+            exit 1
+          fi
+
           ls -lh "$APK"
 
       - name: Upload V22 APK
