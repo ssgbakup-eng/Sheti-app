@@ -8,48 +8,48 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Flutter
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.35.2'
           channel: stable
           cache: true
 
-      - name: Extract Sheti V23
+      - name: Extract V23 Source
         shell: bash
         run: |
-          set -e
-          rm -rf source
-          mkdir -p source
+          set -euo pipefail
 
           ZIP_FILE="Sheti_V4_23.zip"
-          test -f "$ZIP_FILE" || {
-            echo "ERROR: Sheti_V4_23.zip not found"
-            exit 1
-          }
+          test -f "$ZIP_FILE"
 
+          rm -rf source
+          mkdir -p source
           unzip -q "$ZIP_FILE" -d source
-          PUBSPEC="$(find source -type f -name pubspec.yaml -print -quit)"
 
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml not found"
-            exit 1
-          fi
+          PUBSPEC="$(find source -type f -name pubspec.yaml -print -quit)"
+          test -n "$PUBSPEC"
 
           PROJECT_DIR="$(dirname "$PUBSPEC")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Prepare Android And Signing
+      - name: Prepare Android
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd "$PROJECT_DIR"
 
           test -f signing/key.properties
           test -f signing/sheti-release.jks
-          test -f signing/app_build.gradle
 
           rm -rf android
           flutter create . --platforms=android --org com.example
@@ -57,69 +57,105 @@ jobs:
           mkdir -p android/signing
           cp signing/key.properties android/signing/
           cp signing/sheti-release.jks android/signing/
-          cp signing/app_build.gradle android/app/build.gradle
 
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
-          s = s.replace('versionCode 21', 'versionCode 23')
-          s = s.replace('versionName "4.1.7"', 'versionName "4.1.9"')
-
-          if 'versionCode 23' not in s:
-              raise SystemExit("ERROR: versionCode 23 missing")
-          if 'applicationId "com.example.sheti_app"' not in s:
-              raise SystemExit("ERROR: package ID mismatch")
-
-          if 'sourceCompatibility JavaVersion.VERSION_17' not in s:
-              s = s.replace(
-                  'android {',
-                  'android {\n'
-                  '    compileOptions {\n'
-                  '        sourceCompatibility JavaVersion.VERSION_17\n'
-                  '        targetCompatibility JavaVersion.VERSION_17\n'
-                  '    }\n'
-                  '    kotlinOptions {\n'
-                  '        jvmTarget = "17"\n'
-                  '    }',
-                  1
-              )
-
-          p.write_text(s)
-
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
-          ms = manifest.read_text()
-          permission = (
-              '    <uses-permission '
-              'android:name="android.permission.RECORD_AUDIO"/>'
-          )
-          if 'android.permission.RECORD_AUDIO' not in ms:
-              pos = ms.find('>')
-              ms = ms[:pos+1] + '\n' + permission + ms[pos+1:]
-          manifest.write_text(ms)
-          PY
-
-      - name: Verify Signing And Version
+      - name: Configure Release Build
+        shell: bash
         run: |
+          set -euo pipefail
           cd "$PROJECT_DIR"
-          grep -n 'applicationId' android/app/build.gradle
-          grep -n 'versionCode' android/app/build.gradle
-          grep -n 'versionName' android/app/build.gradle
+
+          cat > android/app/build.gradle <<'GRADLE'
+          plugins {
+              id "com.android.application"
+              id "org.jetbrains.kotlin.android"
+              id "dev.flutter.flutter-gradle-plugin"
+          }
+
+          import java.util.Properties
+
+          def props = new Properties()
+          def propsFile = rootProject.file("signing/key.properties")
+          propsFile.withInputStream { props.load(it) }
+
+          android {
+              namespace "com.example.sheti_app"
+              compileSdk flutter.compileSdkVersion
+              ndkVersion flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              defaultConfig {
+                  applicationId "com.example.sheti_app"
+                  minSdk 23
+                  targetSdk flutter.targetSdkVersion
+                  versionCode 23
+                  versionName "4.1.9"
+              }
+
+              signingConfigs {
+                  release {
+                      storeFile rootProject.file(props["storeFile"])
+                      storePassword props["storePassword"]
+                      keyAlias props["keyAlias"]
+                      keyPassword props["keyPassword"]
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+
+          flutter {
+              source "../.."
+          }
+          GRADLE
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if ! grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
+            sed -i 's#<manifest#<manifest\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>#' "$MANIFEST"
+          fi
+
+      - name: Verify Configuration
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          grep 'applicationId' android/app/build.gradle
+          grep 'versionCode' android/app/build.gradle
+          grep 'versionName' android/app/build.gradle
+
           test -f android/signing/key.properties
           test -f android/signing/sheti-release.jks
 
-      - name: Build APK
+      - name: Get Dependencies
         run: |
           cd "$PROJECT_DIR"
           flutter pub get
+
+      - name: Build Samsung S24 APK
+        run: |
+          cd "$PROJECT_DIR"
+          flutter clean
           flutter build apk --release --split-per-abi
 
       - name: Verify APK
         run: |
+          set -euo pipefail
           cd "$PROJECT_DIR"
-          test -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-          ls -lh build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
+          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          test -f "$APK"
+          ls -lh "$APK"
 
       - name: Upload V23 APK
         uses: actions/upload-artifact@v4
