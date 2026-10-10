@@ -1,4 +1,4 @@
-name: Build Sheti V23 APK
+name: Build Sheti V24 APK
 
 on:
   workflow_dispatch:
@@ -24,33 +24,23 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract V23 Source
+      - name: Extract V24 Source
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="Sheti_V4_23.zip"
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: Sheti_V4_23.zip not found in repository root"
-            ls -la
-            exit 1
-          fi
-
+          test -f Sheti_V4_24.zip
           rm -rf source
           mkdir -p source
-          unzip -q "$ZIP_FILE" -d source
+          unzip -q Sheti_V4_24.zip -d source
 
           PUBSPEC="$(find source -type f -name pubspec.yaml -print -quit)"
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml not found inside ZIP"
-            unzip -l "$ZIP_FILE" | head -100
-            exit 1
-          fi
+          test -n "$PUBSPEC"
 
           PROJECT_DIR="$(dirname "$PUBSPEC")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Prepare Android Project
+      - name: Prepare Android
         shell: bash
         run: |
           set -euo pipefail
@@ -61,14 +51,13 @@ jobs:
           test -f signing/key.properties
           test -f signing/sheti-release.jks
 
-          # Create a fresh Android project without changing Dart code.
           flutter create . --platforms=android --org com.example
 
           mkdir -p android/signing
           cp signing/key.properties android/signing/key.properties
           cp signing/sheti-release.jks android/signing/sheti-release.jks
 
-      - name: Configure Release Build
+      - name: Configure Release Signing
         shell: bash
         run: |
           set -euo pipefail
@@ -83,16 +72,14 @@ jobs:
 
           import java.util.Properties
 
-          def signingProps = new Properties()
-          def signingFile = rootProject.file("signing/key.properties")
+          def props = new Properties()
+          def propsFile = rootProject.file("signing/key.properties")
 
-          if (!signingFile.exists()) {
-              throw new GradleException("Release signing properties missing")
+          if (!propsFile.exists()) {
+              throw new GradleException("Signing properties missing")
           }
 
-          signingFile.withInputStream {
-              signingProps.load(it)
-          }
+          propsFile.withInputStream { props.load(it) }
 
           android {
               namespace "com.example.sheti_app"
@@ -112,16 +99,16 @@ jobs:
                   applicationId "com.example.sheti_app"
                   minSdk 23
                   targetSdk flutter.targetSdkVersion
-                  versionCode 23
-                  versionName "4.1.9"
+                  versionCode 24
+                  versionName "4.2.0"
               }
 
               signingConfigs {
                   release {
-                      storeFile rootProject.file(signingProps["storeFile"])
-                      storePassword signingProps["storePassword"]
-                      keyAlias signingProps["keyAlias"]
-                      keyPassword signingProps["keyPassword"]
+                      storeFile rootProject.file(props["storeFile"])
+                      storePassword props["storePassword"]
+                      keyAlias props["keyAlias"]
+                      keyPassword props["keyPassword"]
                   }
               }
 
@@ -137,28 +124,20 @@ jobs:
           }
           GRADLE
 
-          # Validate Manifest XML without modifying it.
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          from pathlib import Path
-
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
-          ET.parse(manifest)
-          print("AndroidManifest.xml is valid XML")
-          PY
-
-      - name: Verify Package Version And Signing
-        shell: bash
+      - name: Verify Configuration
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
           grep -F 'applicationId "com.example.sheti_app"' android/app/build.gradle
-          grep -F 'versionCode 23' android/app/build.gradle
-          grep -F 'versionName "4.1.9"' android/app/build.gradle
+          grep -F 'versionCode 24' android/app/build.gradle
+          grep -F 'versionName "4.2.0"' android/app/build.gradle
 
-          test -f android/signing/key.properties
-          test -f android/signing/sheti-release.jks
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse("android/app/src/main/AndroidManifest.xml")
+          print("Manifest XML valid")
+          PY
 
       - name: Get Dependencies
         run: |
@@ -172,18 +151,15 @@ jobs:
           flutter build apk --release --split-per-abi
 
       - name: Verify APK
-        shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
+          test -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 
-          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-          test -f "$APK"
-          ls -lh "$APK"
-
-      - name: Upload V23 APK
+      - name: Upload V24 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V23-S24-APK
+          name: Sheti-V24-S24-APK
           path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
           if-no-files-found: error
