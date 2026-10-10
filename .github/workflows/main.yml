@@ -30,33 +30,43 @@ jobs:
           set -euo pipefail
 
           ZIP_FILE="Sheti_V4_23.zip"
-          test -f "$ZIP_FILE"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: Sheti_V4_23.zip not found in repository root"
+            ls -la
+            exit 1
+          fi
 
           rm -rf source
           mkdir -p source
           unzip -q "$ZIP_FILE" -d source
 
           PUBSPEC="$(find source -type f -name pubspec.yaml -print -quit)"
-          test -n "$PUBSPEC"
+          if [ -z "$PUBSPEC" ]; then
+            echo "ERROR: pubspec.yaml not found inside ZIP"
+            unzip -l "$ZIP_FILE" | head -100
+            exit 1
+          fi
 
           PROJECT_DIR="$(dirname "$PUBSPEC")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Prepare Android
+      - name: Prepare Android Project
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
+          test -f pubspec.yaml
+          test -d lib
           test -f signing/key.properties
           test -f signing/sheti-release.jks
 
-          rm -rf android
+          # Create a fresh Android project without changing Dart code.
           flutter create . --platforms=android --org com.example
 
           mkdir -p android/signing
-          cp signing/key.properties android/signing/
-          cp signing/sheti-release.jks android/signing/
+          cp signing/key.properties android/signing/key.properties
+          cp signing/sheti-release.jks android/signing/sheti-release.jks
 
       - name: Configure Release Build
         shell: bash
@@ -73,9 +83,16 @@ jobs:
 
           import java.util.Properties
 
-          def props = new Properties()
-          def propsFile = rootProject.file("signing/key.properties")
-          propsFile.withInputStream { props.load(it) }
+          def signingProps = new Properties()
+          def signingFile = rootProject.file("signing/key.properties")
+
+          if (!signingFile.exists()) {
+              throw new GradleException("Release signing properties missing")
+          }
+
+          signingFile.withInputStream {
+              signingProps.load(it)
+          }
 
           android {
               namespace "com.example.sheti_app"
@@ -101,10 +118,10 @@ jobs:
 
               signingConfigs {
                   release {
-                      storeFile rootProject.file(props["storeFile"])
-                      storePassword props["storePassword"]
-                      keyAlias props["keyAlias"]
-                      keyPassword props["keyPassword"]
+                      storeFile rootProject.file(signingProps["storeFile"])
+                      storePassword signingProps["storePassword"]
+                      keyAlias signingProps["keyAlias"]
+                      keyPassword signingProps["keyPassword"]
                   }
               }
 
@@ -120,19 +137,25 @@ jobs:
           }
           GRADLE
 
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          if ! grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
-            sed -i 's#<manifest#<manifest\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>#' "$MANIFEST"
-          fi
+          # Validate Manifest XML without modifying it.
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
 
-      - name: Verify Configuration
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          ET.parse(manifest)
+          print("AndroidManifest.xml is valid XML")
+          PY
+
+      - name: Verify Package Version And Signing
+        shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
-          grep 'applicationId' android/app/build.gradle
-          grep 'versionCode' android/app/build.gradle
-          grep 'versionName' android/app/build.gradle
+          grep -F 'applicationId "com.example.sheti_app"' android/app/build.gradle
+          grep -F 'versionCode 23' android/app/build.gradle
+          grep -F 'versionName "4.1.9"' android/app/build.gradle
 
           test -f android/signing/key.properties
           test -f android/signing/sheti-release.jks
@@ -149,6 +172,7 @@ jobs:
           flutter build apk --release --split-per-abi
 
       - name: Verify APK
+        shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
