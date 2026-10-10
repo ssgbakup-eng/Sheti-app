@@ -1,4 +1,4 @@
-name: Build Sheti V21 APK
+name: Build Sheti V22 APK
 
 on:
   workflow_dispatch:
@@ -8,153 +8,104 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Flutter
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.35.2'
           channel: stable
           cache: true
 
-      - name: Extract Sheti V21
+      - name: Extract V22 Source
         run: |
-          rm -rf source
-          mkdir source
-          unzip -q Sheti_V4_21.zip -d source
+          mkdir -p source
+          unzip -q Sheti_V4_22.zip -d source
 
-          PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
+          PROJECT_DIR="$(dirname "$(find source -name pubspec.yaml -print -quit)")"
 
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: pubspec.yaml not found"
+          if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "source" ]; then
+            echo "ERROR: Flutter project pubspec.yaml not found"
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
+          echo "Flutter project: $PROJECT_DIR"
 
       - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
 
-          rm -rf android
           flutter create . --platforms=android
-
-          mkdir -p android/signing
-
-          cp signing/sheti-release.jks \
-            android/signing/sheti-release.jks
-
-          cp signing/key.properties \
-            android/signing/key.properties
 
       - name: Configure Release Signing
         run: |
           cd "$PROJECT_DIR"
 
-          cat > android/app/build.gradle <<'GRADLE'
-          plugins {
-              id "com.android.application"
-              id "org.jetbrains.kotlin.android"
-              id "dev.flutter.flutter-gradle-plugin"
-          }
-
-          import java.util.Properties
-
-          def signingProperties = new Properties()
-          def signingFile = rootProject.file("signing/key.properties")
-
-          if (signingFile.exists()) {
-              signingFile.withInputStream {
-                  signingProperties.load(it)
-              }
-          }
-
-          android {
-              namespace "com.example.sheti_app"
-              compileSdk flutter.compileSdkVersion
-              ndkVersion flutter.ndkVersion
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-
-              defaultConfig {
-                  applicationId "com.example.sheti_app"
-                  minSdk 23
-                  targetSdk flutter.targetSdkVersion
-                  versionCode 21
-                  versionName "4.1.7"
-              }
-
-              signingConfigs {
-                  release {
-                      storeFile rootProject.file(
-                          signingProperties["storeFile"]
-                      )
-                      storePassword signingProperties["storePassword"]
-                      keyAlias signingProperties["keyAlias"]
-                      keyPassword signingProperties["keyPassword"]
-                  }
-              }
-
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.release
-                  }
-              }
-          }
-
-          flutter {
-              source "../.."
-          }
-          GRADLE
-
-      - name: Verify Configuration
-        run: |
-          cd "$PROJECT_DIR"
-
-          grep 'applicationId' android/app/build.gradle
-          grep 'versionCode' android/app/build.gradle
-          grep 'versionName' android/app/build.gradle
-
-          test -f android/signing/sheti-release.jks
-          test -f android/signing/key.properties
-
-          echo "Configuration checks passed"
-
-      - name: Build Samsung S24 ARM64 APK
-        run: |
-          cd "$PROJECT_DIR"
-
-          flutter clean
-          flutter pub get
-
-          flutter build apk \
-            --release \
-            --split-per-abi
-
-      - name: Verify V21 APK
-        run: |
-          cd "$PROJECT_DIR"
-
-          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: ARM64 APK NOT FOUND"
+          if [ ! -f signing/key.properties ] || \
+             [ ! -f signing/sheti-release.jks ]; then
+            echo "ERROR: Existing release signing files are missing"
             exit 1
           fi
 
+          mkdir -p android/signing
+          cp signing/key.properties android/signing/key.properties
+          cp signing/sheti-release.jks android/signing/sheti-release.jks
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/build.gradle")
+          s = p.read_text()
+
+          if 'applicationId "com.example.sheti_app"' not in s:
+              raise SystemExit("ERROR: Unexpected applicationId")
+
+          s = s.replace('versionCode flutterVersionCode.toInteger()', 'versionCode 22')
+          s = s.replace('versionName flutterVersionName', 'versionName "4.1.8"')
+
+          if 'versionCode 22' not in s:
+              raise SystemExit("ERROR: Could not set versionCode 22")
+
+          p.write_text(s)
+          PY
+
+      - name: Check Version and Signing
+        run: |
+          cd "$PROJECT_DIR"
+          grep -n 'applicationId' android/app/build.gradle
+          grep -n 'versionCode' android/app/build.gradle
+          grep -n 'versionName' android/app/build.gradle
+          test -f android/signing/key.properties
+          test -f android/signing/sheti-release.jks
+
+      - name: Get Dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          flutter pub get
+
+      - name: Build Release APK
+        run: |
+          cd "$PROJECT_DIR"
+          flutter build apk --release --split-per-abi
+
+      - name: Verify APK
+        run: |
+          cd "$PROJECT_DIR"
+          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          test -f "$APK"
           ls -lh "$APK"
 
-      - name: Upload V21 APK
+      - name: Upload V22 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V21-S24-APK
+          name: Sheti-V22-S24-APK
           path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          if-no-files-found: error
