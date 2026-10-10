@@ -27,23 +27,29 @@ jobs:
           PROJECT_DIR=$(dirname "$(find source -name pubspec.yaml -print -quit)")
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "pubspec.yaml not found"
+            echo "ERROR: pubspec.yaml not found"
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
+
           rm -rf android
           flutter create . --platforms=android
 
           mkdir -p android/signing
-          cp signing/sheti-release.jks android/signing/sheti-release.jks
-          cp signing/key.properties android/signing/key.properties
 
-      - name: Configure Android Signing
+          cp signing/sheti-release.jks \
+            android/signing/sheti-release.jks
+
+          cp signing/key.properties \
+            android/signing/key.properties
+
+      - name: Configure Release Signing
         run: |
           cd "$PROJECT_DIR"
 
@@ -89,7 +95,9 @@ jobs:
 
               signingConfigs {
                   release {
-                      storeFile rootProject.file(signingProperties["storeFile"])
+                      storeFile rootProject.file(
+                          signingProperties["storeFile"]
+                      )
                       storePassword signingProperties["storePassword"]
                       keyAlias signingProperties["keyAlias"]
                       keyPassword signingProperties["keyPassword"]
@@ -108,12 +116,42 @@ jobs:
           }
           GRADLE
 
-      - name: Build V21 APK
+      - name: Verify Configuration
         run: |
           cd "$PROJECT_DIR"
+
+          grep 'applicationId' android/app/build.gradle
+          grep 'versionCode' android/app/build.gradle
+          grep 'versionName' android/app/build.gradle
+
+          test -f android/signing/sheti-release.jks
+          test -f android/signing/key.properties
+
+          echo "Configuration checks passed"
+
+      - name: Build Samsung S24 ARM64 APK
+        run: |
+          cd "$PROJECT_DIR"
+
           flutter clean
           flutter pub get
-          flutter build apk --release --split-per-abi
+
+          flutter build apk \
+            --release \
+            --split-per-abi
+
+      - name: Verify V21 APK
+        run: |
+          cd "$PROJECT_DIR"
+
+          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: ARM64 APK NOT FOUND"
+            exit 1
+          fi
+
+          ls -lh "$APK"
 
       - name: Upload V21 APK
         uses: actions/upload-artifact@v4
