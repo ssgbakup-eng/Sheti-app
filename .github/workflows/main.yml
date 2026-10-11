@@ -16,6 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check V25 ZIP
+        shell: bash
         run: |
           test -f Sheti_V4_25.zip || {
             echo "ERROR: Sheti_V4_25.zip not found in repository root"
@@ -36,11 +37,19 @@ jobs:
           cache: true
 
       - name: Extract V25 Source
+        shell: bash
         run: |
-          mkdir -p source project
+          mkdir -p source
           unzip -q Sheti_V4_25.zip -d source
 
+          test -f source/pubspec.yaml
+          test -f source/lib/main.dart
+          test -f source/signing/app_build.gradle
+          test -f source/signing/key.properties
+          test -f source/signing/sheti-release.jks
+
       - name: Create Android Project
+        shell: bash
         run: |
           flutter create \
             --platforms=android \
@@ -49,6 +58,7 @@ jobs:
             project
 
           cp source/pubspec.yaml project/pubspec.yaml
+
           rm -rf project/lib
           cp -r source/lib project/lib
 
@@ -56,95 +66,36 @@ jobs:
             cp -r source/assets project/assets
           fi
 
-          mkdir -p project/android/signing
-          cp source/signing/sheti-release.jks \
-            project/android/signing/
-          cp source/signing/key.properties \
-            project/android/signing/
-
       - name: Configure Release Signing
-        working-directory: project
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+          mkdir -p project/android/signing
 
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
+          cp source/signing/app_build.gradle \
+            project/android/app/build.gradle
 
-          if "signing/key.properties" not in s:
-              prefix = """
-          import java.util.Properties
+          cp source/signing/key.properties \
+            project/android/signing/key.properties
 
-          """
-              marker = re.search(
-                  r"(?m)^plugins\\s*\\{.*?^\\}",
-                  s,
-                  re.S
-              )
-              if not marker:
-                  raise SystemExit("Gradle plugins block not found")
+          cp source/signing/sheti-release.jks \
+            project/android/signing/sheti-release.jks
 
-              config = """
-          def signingProperties = new Properties()
-          def signingFile = rootProject.file("signing/key.properties")
-          if (!signingFile.exists()) {
-              throw new GradleException("Signing key properties missing")
-          }
-          signingFile.withInputStream {
-              signingProperties.load(it)
-          }
+          rm -f project/android/app/build.gradle.kts
 
-          """
-              s = prefix + s
-              marker = re.search(
-                  r"(?m)^plugins\\s*\\{.*?^\\}",
-                  s,
-                  re.S
-              )
-              s = s[:marker.end()] + "\\n" + config + s[marker.end():]
-
-          if "signingConfigs {" not in s:
-              block = """
-              signingConfigs {
-                  release {
-                      storeFile rootProject.file(
-                          signingProperties.getProperty("storeFile")
-                      )
-                      storePassword signingProperties.getProperty("storePassword")
-                      keyAlias signingProperties.getProperty("keyAlias")
-                      keyPassword signingProperties.getProperty("keyPassword")
-                  }
-              }
-
-          """
-              s, count = re.subn(
-                  r"(?m)^\\s*buildTypes\\s*\\{",
-                  block + "    buildTypes {",
-                  s,
-                  count=1
-              )
-              if count != 1:
-                  raise SystemExit("Gradle buildTypes block not found")
-
-          s, count = re.subn(
-              r"signingConfig\\s*=\\s*signingConfigs\\.debug",
-              "signingConfig = signingConfigs.release",
-              s
-          )
-
-          if count == 0 and "signingConfigs.release" not in s:
-              raise SystemExit("Release signing configuration not applied")
-
-          p.write_text(s)
-          PY
+          test -f project/android/app/build.gradle
+          test -f project/android/signing/key.properties
+          test -f project/android/signing/sheti-release.jks
 
       - name: Get Dependencies
         working-directory: project
         run: |
           flutter clean
           flutter pub get
+
+      - name: Check Dart Code
+        working-directory: project
+        run: |
+          flutter analyze --no-pub
 
       - name: Build Release APK
         working-directory: project
@@ -153,15 +104,19 @@ jobs:
             --release \
             --split-per-abi
 
-      - name: Rename ARM64 APK
-        working-directory: project
+      - name: Verify APK
+        shell: bash
         run: |
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-            ../Sheti_V4_25_ARM64.apk
+          test -f project/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
+          mkdir -p release
+          cp project/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+            release/Sheti_V4_25_ARM64.apk
 
       - name: Upload V25 APK
         uses: actions/upload-artifact@v4
         with:
           name: Sheti-V25-APK
-          path: Sheti_V4_25_ARM64.apk
+          path: release/Sheti_V4_25_ARM64.apk
           if-no-files-found: error
+          retention-days: 14
