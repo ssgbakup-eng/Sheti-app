@@ -16,8 +16,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check V25 ZIP
+        shell: bash
         run: |
-          test -f Sheti_V4_25.zip
+          test -f Sheti_V4_25.zip || {
+            echo "ERROR: Sheti_V4_25.zip not found"
+            exit 1
+          }
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -33,17 +37,18 @@ jobs:
           cache: true
 
       - name: Extract V25 Source
+        shell: bash
         run: |
           mkdir -p source
           unzip -q Sheti_V4_25.zip -d source
 
           test -f source/pubspec.yaml
           test -f source/lib/main.dart
-          test -f source/signing/app_build.gradle
           test -f source/signing/key.properties
           test -f source/signing/sheti-release.jks
 
       - name: Create Flutter Project
+        shell: bash
         run: |
           flutter create \
             --platforms=android \
@@ -56,8 +61,9 @@ jobs:
           rm -rf project/lib
           cp -r source/lib project/lib
 
-          mkdir -p project/assets
-          cp -r source/assets/. project/assets/
+          if [ -d source/assets ]; then
+            cp -r source/assets/. project/assets/
+          fi
 
       - name: Configure Android Signing
         shell: bash
@@ -75,12 +81,9 @@ jobs:
           import re
 
           p = Path("project/android/app/build.gradle.kts")
-          if not p.exists():
-              raise SystemExit("Flutter Gradle Kotlin file missing")
-
           s = p.read_text()
 
-          if 'id("dev.flutter.flutter-gradle-plugin")' not in s:
+          if "dev.flutter.flutter-gradle-plugin" not in s:
               raise SystemExit("Flutter Gradle plugin missing")
 
           s = re.sub(
@@ -108,9 +111,7 @@ jobs:
           )
 
           signing = '''
-          import java.util.Properties
-
-          val signingProperties = Properties()
+          val signingProperties = java.util.Properties()
           val signingFile = rootProject.file("signing/key.properties")
 
           if (!signingFile.exists()) {
@@ -121,7 +122,12 @@ jobs:
               signingProperties.load(it)
           }
 
-          android {
+          '''
+
+          if "val signingProperties = " not in s:
+              s = s.replace("android {", signing + "android {", 1)
+
+          config = '''
               signingConfigs {
                   create("release") {
                       storeFile = rootProject.file(
@@ -136,18 +142,35 @@ jobs:
                   }
               }
 
-              buildTypes {
-                  getByName("release") {
-                      signingConfig = signingConfigs.getByName("release")
-                  }
-              }
-          }
           '''
 
-          if 'signingConfigs.create("release")' not in s:
-              s += "\\n" + signing
+          if 'create("release")' not in s:
+              s = re.sub(
+                  r'(?m)^(\s*)buildTypes\s*\{',
+                  lambda m: config + m.group(0),
+                  s,
+                  count=1
+              )
+
+          s = s.replace(
+              'signingConfig = signingConfigs.getByName("debug")',
+              'signingConfig = signingConfigs.getByName("release")'
+          )
+
+          if 'signingConfig = signingConfigs.getByName("release")' not in s:
+              s = re.sub(
+                  r'(getByName\("release"\)\s*\{)',
+                  r'\1\n            signingConfig = signingConfigs.getByName("release")',
+                  s,
+                  count=1
+              )
 
           p.write_text(s)
+
+          if "\\\\n" in s:
+              raise SystemExit("Unexpected literal newline escape in Gradle file")
+
+          print("Gradle signing configuration prepared.")
           PY
 
           test -f project/android/app/build.gradle.kts
@@ -163,7 +186,8 @@ jobs:
         run: |
           flutter build apk --release
 
-      - name: Verify and Rename APK
+      - name: Verify APK
+        shell: bash
         run: |
           test -f project/build/app/outputs/flutter-apk/app-release.apk
           mkdir -p release
