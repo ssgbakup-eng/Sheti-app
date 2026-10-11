@@ -15,9 +15,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Check V25 ZIP
-        run: test -f Sheti_V4_25.zip
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -32,33 +29,27 @@ jobs:
           cache: true
 
       - name: Extract V25 Source
+        shell: bash
         run: |
-          mkdir -p source
-          unzip -q Sheti_V4_25.zip -d source
-          test -f source/pubspec.yaml
-          test -f source/lib/main.dart
-          test -f source/signing/key.properties
-          test -f source/signing/sheti-release.jks
+          test -f Sheti_V4_25.zip
+          mkdir app
+          unzip -q Sheti_V4_25.zip -d app
 
-      - name: Create Flutter Project
+          test -f app/pubspec.yaml
+          test -f app/lib/main.dart
+          test -f app/signing/key.properties
+          test -f app/signing/sheti-release.jks
+
+      - name: Create Android Project
+        working-directory: app
         run: |
           flutter create \
             --platforms=android \
             --org com.example \
-            --project-name sheti_app \
-            project
+            .
 
-          cp source/pubspec.yaml project/pubspec.yaml
-          rm -rf project/lib
-          cp -r source/lib project/lib
-
-          if [ -d source/assets ]; then
-            mkdir -p project/assets
-            cp -r source/assets/. project/assets/
-          fi
-
-      - name: Fix Image Package Versions
-        working-directory: project
+      - name: Configure Dependencies
+        working-directory: app
         run: |
           cat >> pubspec.yaml <<'EOF'
 
@@ -68,17 +59,18 @@ jobs:
           EOF
 
       - name: Configure Android Signing
+        working-directory: app
         shell: bash
         run: |
-          mkdir -p project/android/signing
+          mkdir -p android/signing
 
-          cp source/signing/key.properties \
-            project/android/signing/key.properties
+          cp signing/key.properties \
+            android/signing/key.properties
 
-          cp source/signing/sheti-release.jks \
-            project/android/signing/sheti-release.jks
+          cp signing/sheti-release.jks \
+            android/signing/sheti-release.jks
 
-          cat > project/android/app/build.gradle <<'GRADLE'
+          cat > android/app/build.gradle <<'GRADLE'
           import java.util.Properties
 
           plugins {
@@ -142,30 +134,31 @@ jobs:
           }
           GRADLE
 
-          rm -f project/android/app/build.gradle.kts
+          rm -f android/app/build.gradle.kts
 
       - name: Get Dependencies
-        working-directory: project
+        working-directory: app
         run: |
           flutter clean
           flutter pub get
 
       - name: Build Release APK
-        working-directory: project
+        working-directory: app
         run: |
-          flutter build apk --release
+          flutter build apk --release --split-per-abi
 
       - name: Verify APK
         run: |
-          test -f project/build/app/outputs/flutter-apk/app-release.apk
+          test -f app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
           mkdir -p release
-          cp project/build/app/outputs/flutter-apk/app-release.apk \
-            release/Sheti_V4_25.apk
+          cp app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+            release/Sheti_V4_25_ARM64.apk
 
       - name: Upload V25 APK
         uses: actions/upload-artifact@v4
         with:
           name: Sheti-V25-APK
-          path: release/Sheti_V4_25.apk
+          path: release/Sheti_V4_25_ARM64.apk
           if-no-files-found: error
           retention-days: 14
