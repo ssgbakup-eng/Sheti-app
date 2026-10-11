@@ -18,10 +18,7 @@ jobs:
       - name: Check V25 ZIP
         shell: bash
         run: |
-          test -f Sheti_V4_25.zip || {
-            echo "ERROR: Sheti_V4_25.zip not found"
-            exit 1
-          }
+          test -f Sheti_V4_25.zip
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -62,6 +59,7 @@ jobs:
           cp -r source/lib project/lib
 
           if [ -d source/assets ]; then
+            mkdir -p project/assets
             cp -r source/assets/. project/assets/
           fi
 
@@ -85,6 +83,10 @@ jobs:
 
           if "dev.flutter.flutter-gradle-plugin" not in s:
               raise SystemExit("Flutter Gradle plugin missing")
+
+          # Import must be at the top of the Kotlin Gradle file.
+          if "import java.util.Properties" not in s:
+              s = "import java.util.Properties\n" + s
 
           s = re.sub(
               r'namespace\s*=\s*"[^"]+"',
@@ -110,8 +112,10 @@ jobs:
               s
           )
 
-          signing = '''
-          val signingProperties = java.util.Properties()
+          # Add signing properties before the android block.
+          if "val signingProperties = Properties()" not in s:
+              signing = '''
+          val signingProperties = Properties()
           val signingFile = rootProject.file("signing/key.properties")
 
           if (!signingFile.exists()) {
@@ -123,11 +127,16 @@ jobs:
           }
 
           '''
+              s = re.sub(
+                  r'(?m)^android\s*\{',
+                  lambda m: signing + m.group(0),
+                  s,
+                  count=1
+              )
 
-          if "val signingProperties = " not in s:
-              s = s.replace("android {", signing + "android {", 1)
-
-          config = '''
+          # Add release signing configuration inside android.
+          if 'create("release")' not in s:
+              signing_config = '''
               signingConfigs {
                   create("release") {
                       storeFile = rootProject.file(
@@ -143,34 +152,41 @@ jobs:
               }
 
           '''
-
-          if 'create("release")' not in s:
-              s = re.sub(
+              s, count = re.subn(
                   r'(?m)^(\s*)buildTypes\s*\{',
-                  lambda m: config + m.group(0),
+                  lambda m: signing_config + m.group(0),
                   s,
                   count=1
               )
+              if count != 1:
+                  raise SystemExit("Could not configure release signing")
 
-          s = s.replace(
-              'signingConfig = signingConfigs.getByName("debug")',
-              'signingConfig = signingConfigs.getByName("release")'
+          # Use the release key for release builds.
+          s = re.sub(
+              r'signingConfig\s*=\s*signingConfigs\.getByName\("debug"\)',
+              'signingConfig = signingConfigs.getByName("release")',
+              s
           )
 
-          if 'signingConfig = signingConfigs.getByName("release")' not in s:
-              s = re.sub(
-                  r'(getByName\("release"\)\s*\{)',
-                  r'\1\n            signingConfig = signingConfigs.getByName("release")',
-                  s,
-                  count=1
-              )
+          release_block = re.search(
+              r'getByName\("release"\)\s*\{',
+              s
+          )
+
+          if release_block:
+              start = release_block.end()
+              remainder = s[start:start + 500]
+              if 'signingConfig = signingConfigs.getByName("release")' not in remainder:
+                  s = (
+                      s[:start]
+                      + '\n            signingConfig = signingConfigs.getByName("release")'
+                      + s[start:]
+                  )
+          else:
+              raise SystemExit("Release build type missing")
 
           p.write_text(s)
-
-          if "\\\\n" in s:
-              raise SystemExit("Unexpected literal newline escape in Gradle file")
-
-          print("Gradle signing configuration prepared.")
+          print("Android signing configuration updated.")
           PY
 
           test -f project/android/app/build.gradle.kts
@@ -190,8 +206,8 @@ jobs:
         shell: bash
         run: |
           test -f project/build/app/outputs/flutter-apk/app-release.apk
-          mkdir -p release
 
+          mkdir -p release
           cp project/build/app/outputs/flutter-apk/app-release.apk \
             release/Sheti_V4_25.apk
 
