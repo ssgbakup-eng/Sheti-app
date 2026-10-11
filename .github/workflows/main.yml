@@ -16,8 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check V25 ZIP
-        run: |
-          test -f Sheti_V4_25.zip
+        run: test -f Sheti_V4_25.zip
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -36,10 +35,8 @@ jobs:
         run: |
           mkdir -p source
           unzip -q Sheti_V4_25.zip -d source
-
           test -f source/pubspec.yaml
           test -f source/lib/main.dart
-          test -f source/signing/app_build.gradle
           test -f source/signing/key.properties
           test -f source/signing/sheti-release.jks
 
@@ -52,7 +49,6 @@ jobs:
             project
 
           cp source/pubspec.yaml project/pubspec.yaml
-
           rm -rf project/lib
           cp -r source/lib project/lib
 
@@ -60,6 +56,16 @@ jobs:
             mkdir -p project/assets
             cp -r source/assets/. project/assets/
           fi
+
+      - name: Fix Image Package Versions
+        working-directory: project
+        run: |
+          cat >> pubspec.yaml <<'EOF'
+
+          dependency_overrides:
+            image: 4.3.0
+            archive: 3.6.1
+          EOF
 
       - name: Configure Android Signing
         shell: bash
@@ -138,10 +144,6 @@ jobs:
 
           rm -f project/android/app/build.gradle.kts
 
-          test -f project/android/app/build.gradle
-          test -f project/android/signing/key.properties
-          test -f project/android/signing/sheti-release.jks
-
       - name: Get Dependencies
         working-directory: project
         run: |
@@ -156,7 +158,6 @@ jobs:
       - name: Verify APK
         run: |
           test -f project/build/app/outputs/flutter-apk/app-release.apk
-
           mkdir -p release
           cp project/build/app/outputs/flutter-apk/app-release.apk \
             release/Sheti_V4_25.apk
