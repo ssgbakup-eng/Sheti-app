@@ -16,7 +16,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check V25 ZIP
-        shell: bash
         run: |
           test -f Sheti_V4_25.zip
 
@@ -34,18 +33,17 @@ jobs:
           cache: true
 
       - name: Extract V25 Source
-        shell: bash
         run: |
           mkdir -p source
           unzip -q Sheti_V4_25.zip -d source
 
           test -f source/pubspec.yaml
           test -f source/lib/main.dart
+          test -f source/signing/app_build.gradle
           test -f source/signing/key.properties
           test -f source/signing/sheti-release.jks
 
       - name: Create Flutter Project
-        shell: bash
         run: |
           flutter create \
             --platforms=android \
@@ -74,122 +72,75 @@ jobs:
           cp source/signing/sheti-release.jks \
             project/android/signing/sheti-release.jks
 
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+          cat > project/android/app/build.gradle <<'GRADLE'
+          import java.util.Properties
 
-          p = Path("project/android/app/build.gradle.kts")
-          s = p.read_text()
-
-          if "dev.flutter.flutter-gradle-plugin" not in s:
-              raise SystemExit("Flutter Gradle plugin missing")
-
-          # Import must be at the top of the Kotlin Gradle file.
-          if "import java.util.Properties" not in s:
-              s = "import java.util.Properties\n" + s
-
-          s = re.sub(
-              r'namespace\s*=\s*"[^"]+"',
-              'namespace = "com.example.sheti_app"',
-              s
-          )
-
-          s = re.sub(
-              r'applicationId\s*=\s*"[^"]+"',
-              'applicationId = "com.example.sheti_app"',
-              s
-          )
-
-          s = re.sub(
-              r'versionCode\s*=\s*\d+',
-              'versionCode = 25',
-              s
-          )
-
-          s = re.sub(
-              r'versionName\s*=\s*"[^"]+"',
-              'versionName = "4.3.0"',
-              s
-          )
-
-          # Add signing properties before the android block.
-          if "val signingProperties = Properties()" not in s:
-              signing = '''
-          val signingProperties = Properties()
-          val signingFile = rootProject.file("signing/key.properties")
-
-          if (!signingFile.exists()) {
-              throw GradleException("Signing properties missing")
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+              id 'dev.flutter.flutter-gradle-plugin'
           }
 
-          signingFile.inputStream().use {
+          def signingProperties = new Properties()
+          def signingFile = rootProject.file("signing/key.properties")
+
+          if (!signingFile.exists()) {
+              throw new GradleException("Signing properties missing")
+          }
+
+          signingFile.withInputStream {
               signingProperties.load(it)
           }
 
-          '''
-              s = re.sub(
-                  r'(?m)^android\s*\{',
-                  lambda m: signing + m.group(0),
-                  s,
-                  count=1
-              )
+          android {
+              namespace "com.example.sheti_app"
+              compileSdk 35
 
-          # Add release signing configuration inside android.
-          if 'create("release")' not in s:
-              signing_config = '''
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              defaultConfig {
+                  applicationId "com.example.sheti_app"
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 25
+                  versionName "4.3.0"
+              }
+
               signingConfigs {
-                  create("release") {
-                      storeFile = rootProject.file(
+                  release {
+                      storeFile rootProject.file(
                           signingProperties.getProperty("storeFile")
                       )
-                      storePassword =
-                          signingProperties.getProperty("storePassword")
-                      keyAlias =
-                          signingProperties.getProperty("keyAlias")
-                      keyPassword =
-                          signingProperties.getProperty("keyPassword")
+                      storePassword signingProperties.getProperty("storePassword")
+                      keyAlias signingProperties.getProperty("keyAlias")
+                      keyPassword signingProperties.getProperty("keyPassword")
                   }
               }
 
-          '''
-              s, count = re.subn(
-                  r'(?m)^(\s*)buildTypes\s*\{',
-                  lambda m: signing_config + m.group(0),
-                  s,
-                  count=1
-              )
-              if count != 1:
-                  raise SystemExit("Could not configure release signing")
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
 
-          # Use the release key for release builds.
-          s = re.sub(
-              r'signingConfig\s*=\s*signingConfigs\.getByName\("debug"\)',
-              'signingConfig = signingConfigs.getByName("release")',
-              s
-          )
+          flutter {
+              source "../.."
+          }
+          GRADLE
 
-          release_block = re.search(
-              r'getByName\("release"\)\s*\{',
-              s
-          )
+          rm -f project/android/app/build.gradle.kts
 
-          if release_block:
-              start = release_block.end()
-              remainder = s[start:start + 500]
-              if 'signingConfig = signingConfigs.getByName("release")' not in remainder:
-                  s = (
-                      s[:start]
-                      + '\n            signingConfig = signingConfigs.getByName("release")'
-                      + s[start:]
-                  )
-          else:
-              raise SystemExit("Release build type missing")
-
-          p.write_text(s)
-          print("Android signing configuration updated.")
-          PY
-
-          test -f project/android/app/build.gradle.kts
+          test -f project/android/app/build.gradle
+          test -f project/android/signing/key.properties
+          test -f project/android/signing/sheti-release.jks
 
       - name: Get Dependencies
         working-directory: project
@@ -203,7 +154,6 @@ jobs:
           flutter build apk --release
 
       - name: Verify APK
-        shell: bash
         run: |
           test -f project/build/app/outputs/flutter-apk/app-release.apk
 
