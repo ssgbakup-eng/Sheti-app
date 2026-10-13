@@ -37,24 +37,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -f Sheti_V4_26.zip
+          ZIP_FILE="Sheti_V4_26.zip"
+          test -f "$ZIP_FILE" || {
+            echo "ERROR: V26 ZIP not found"
+            exit 1
+          }
 
           rm -rf source
           mkdir -p source
-          unzip -q Sheti_V4_26.zip -d source
+          unzip -q "$ZIP_FILE" -d source
 
           PROJECT_DIR="source"
 
-          test -f "$PROJECT_DIR/pubspec.yaml"
-          test -f "$PROJECT_DIR/lib/main.dart"
-          test -f "$PROJECT_DIR/signing/app_build.gradle"
+          test -s "$PROJECT_DIR/pubspec.yaml"
+          test -s "$PROJECT_DIR/lib/main.dart"
           test -s "$PROJECT_DIR/signing/key.properties"
           test -s "$PROJECT_DIR/signing/sheti-release.jks"
+          test -s "$PROJECT_DIR/signing/app_build.gradle"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "V26 source verified."
-          find "$PROJECT_DIR" -maxdepth 2 -type f | sort
+          echo "V26 source and signing files verified."
 
       - name: Set V26 Version
         shell: bash
@@ -68,41 +70,39 @@ jobs:
 
           p = Path("pubspec.yaml")
           s = p.read_text(encoding="utf-8")
-
           s, count = re.subn(
               r"(?m)^version\s*:.*$",
               "version: 4.4.0+26",
               s,
               count=1
           )
-
           if count != 1:
               raise SystemExit("ERROR: pubspec version field missing")
-
           p.write_text(s, encoding="utf-8")
 
-          gradle = Path("signing/app_build.gradle")
-          g = gradle.read_text(encoding="utf-8")
+          p = Path("signing/app_build.gradle")
+          s = p.read_text(encoding="utf-8")
 
-          g, c1 = re.subn(
+          s, c1 = re.subn(
               r"(?m)^(\s*versionCode\s+)\d+",
               r"\g<1>26",
-              g,
+              s,
               count=1
           )
-
-          g, c2 = re.subn(
+          s, c2 = re.subn(
               r'(?m)^(\s*versionName\s+")[^"]*(")',
               r'\g<1>4.4.0\2',
-              g,
+              s,
               count=1
           )
 
           if c1 != 1 or c2 != 1:
-              raise SystemExit("ERROR: Android version fields missing")
+              raise SystemExit(
+                  "ERROR: Could not update signing/app_build.gradle version"
+              )
 
-          gradle.write_text(g, encoding="utf-8")
-          print("V26 version verified: 4.4.0+26")
+          p.write_text(s, encoding="utf-8")
+          print("V26 version set to 4.4.0+26")
           PY
 
       - name: Generate Android Project
@@ -115,12 +115,22 @@ jobs:
             --platforms=android \
             --org com.example
 
-          test -f android/settings.gradle
-          test -f android/app/src/main/AndroidManifest.xml
+          if [ ! -f android/settings.gradle ] && \
+             [ ! -f android/settings.gradle.kts ]; then
+            echo "ERROR: Gradle settings file missing"
+            exit 1
+          fi
 
-          echo "Android project generated successfully."
+          if [ ! -f android/app/build.gradle ] && \
+             [ ! -f android/app/build.gradle.kts ]; then
+            echo "ERROR: Android app Gradle file missing"
+            exit 1
+          fi
 
-      - name: Configure Existing Release Signing
+          test -s android/app/src/main/AndroidManifest.xml
+          echo "Android project generated and verified."
+
+      - name: Configure Release Signing
         shell: bash
         run: |
           set -euo pipefail
@@ -137,7 +147,7 @@ jobs:
           test -s android/signing/key.properties
           test -s android/signing/sheti-release.jks
 
-          echo "Original V26 signing files copied."
+          echo "Release signing files copied."
 
       - name: Configure Android Release Gradle
         shell: bash
@@ -145,14 +155,17 @@ jobs:
           set -euo pipefail
           cd "$PROJECT_DIR"
 
+          # Use one Groovy app Gradle file, not both DSL variants.
+          rm -f android/app/build.gradle.kts
+
           cat > android/app/build.gradle <<'GRADLE'
+          import java.util.Properties
+
           plugins {
               id "com.android.application"
               id "org.jetbrains.kotlin.android"
               id "dev.flutter.flutter-gradle-plugin"
           }
-
-          import java.util.Properties
 
           def signingProperties = new Properties()
           def signingPropertiesFile =
@@ -160,7 +173,7 @@ jobs:
 
           if (!signingPropertiesFile.exists()) {
               throw new GradleException(
-                  "Release signing properties missing"
+                  "Release key.properties not found"
               )
           }
 
@@ -168,20 +181,25 @@ jobs:
               signingProperties.load(it)
           }
 
-          def keystorePath =
+          def storeFileValue =
               signingProperties.getProperty("storeFile")
 
-          if (!keystorePath) {
+          if (!storeFileValue) {
               throw new GradleException(
-                  "storeFile missing in key.properties"
+                  "storeFile is missing in key.properties"
               )
           }
 
-          def keystoreFile = rootProject.file(keystorePath)
+          def storeFileCandidate = rootProject.file(storeFileValue)
 
-          if (!keystoreFile.exists()) {
+          if (!storeFileCandidate.exists()) {
+              storeFileCandidate =
+                  rootProject.file("signing/sheti-release.jks")
+          }
+
+          if (!storeFileCandidate.exists()) {
               throw new GradleException(
-                  "Release keystore file missing"
+                  "Release keystore path could not be resolved"
               )
           }
 
@@ -209,7 +227,7 @@ jobs:
 
               signingConfigs {
                   release {
-                      storeFile keystoreFile
+                      storeFile storeFileCandidate
                       storePassword signingProperties.getProperty(
                           "storePassword"
                       )
@@ -248,27 +266,28 @@ jobs:
           if "android.permission.RECORD_AUDIO" not in s:
               pos = s.find(">")
               if pos < 0:
-                  raise SystemExit("Invalid AndroidManifest.xml")
+                  raise SystemExit("ERROR: Invalid AndroidManifest.xml")
               s = s[:pos + 1] + "\n    " + permission + s[pos + 1:]
               p.write_text(s, encoding="utf-8")
-
-          print("Android manifest checked.")
           PY
 
           grep -q 'applicationId "com.example.sheti_app"' \
             android/app/build.gradle
           grep -q 'versionCode 26' android/app/build.gradle
           grep -q 'versionName "4.4.0"' android/app/build.gradle
+          grep -q 'signingConfig signingConfigs.release' \
+            android/app/build.gradle
 
-          echo "Package ID and version verified."
+          echo "Application ID and release Gradle settings verified."
 
-      - name: Get Flutter Dependencies
+      - name: Flutter Clean and Dependencies
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
           flutter --version
+          flutter clean
           flutter pub get
 
       - name: Build V26 ARM64 APK
@@ -276,9 +295,6 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-
-          flutter clean
-          flutter pub get
 
           flutter build apk \
             --release \
@@ -291,11 +307,14 @@ jobs:
 
           APK="$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk"
 
-          test -s "$APK"
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: Release APK not generated"
+            find "$PROJECT_DIR/build" -type f -name "*.apk" || true
+            exit 1
+          fi
+
           mkdir -p release_apk
-
           cp "$APK" release_apk/Sheti_V4_26_ARM64.apk
-
           ls -lh release_apk/Sheti_V4_26_ARM64.apk
 
       - name: Upload V26 APK
