@@ -26,90 +26,88 @@ jobs:
         with:
           flutter-version: "3.35.2"
           channel: stable
-          cache: true
 
       - name: Extract V26 Source
         run: |
           test -f Sheti_V4_26.zip
-          mkdir -p source
-          unzip -q Sheti_V4_26.zip -d source
-          test -f source/pubspec.yaml
-          test -f source/lib/main.dart
-          test -f source/signing/key.properties
-          test -f source/signing/sheti-release.jks
+          mkdir -p app
+          unzip -q Sheti_V4_26.zip -d app
+          test -f app/pubspec.yaml
+          test -f app/lib/main.dart
+          test -f app/signing/key.properties
+          test -f app/signing/sheti-release.jks
+          test -f app/signing/app_build.gradle
 
-      - name: Create Flutter Project
+      - name: Create Android Project
+        working-directory: app
         run: |
-          flutter create \
-            --platforms=android \
-            --project-name sheti_app \
-            project
+          flutter create --platforms=android --org com.example .
 
-          cp source/pubspec.yaml project/pubspec.yaml
-
-          rm -rf project/lib
-          cp -r source/lib project/lib
-
-          if [ -d source/assets ]; then
-            mkdir -p project/assets
-            cp -r source/assets/. project/assets/
-          fi
-
-      - name: Configure Android
+      - name: Configure Android Signing and Version
+        working-directory: app
         shell: bash
+        run: |
+          cp signing/app_build.gradle android/app/build.gradle
+          mkdir -p android/signing
+          cp signing/key.properties android/signing/key.properties
+          cp signing/sheti-release.jks android/signing/sheti-release.jks
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/build.gradle")
+          s = p.read_text()
+
+          if "com.example.sheti_app" not in s:
+              s = re.sub(
+                  r'applicationId\s+["\'][^"\']+["\']',
+                  'applicationId "com.example.sheti_app"',
+                  s
+              )
+
+          s = re.sub(r'versionCode\s+\d+', 'versionCode 26', s)
+          s = re.sub(r'versionName\s+["\'][^"\']+["\']',
+                     'versionName "4.4.0"', s)
+
+          p.write_text(s)
+          PY
+
+      - name: Set Java and Kotlin Target
+        working-directory: app
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          p = Path("project/android/app/build.gradle.kts")
-          if not p.exists():
-              raise SystemExit("Android Gradle Kotlin file missing")
-
+          p = Path("android/app/build.gradle")
           s = p.read_text()
-
-          if "compileOptions {" not in s:
-              raise SystemExit("compileOptions block missing")
 
           s = s.replace(
               "JavaVersion.VERSION_1_8",
               "JavaVersion.VERSION_17"
           )
-
           s = s.replace(
-              "jvmTarget = JavaVersion.VERSION_1_8.toString()",
-              'jvmTarget = "17"'
-          )
-
-          s = s.replace(
-              "jvmTarget = \"1.8\"",
+              'jvmTarget = "1.8"',
               'jvmTarget = "17"'
           )
 
           p.write_text(s)
           PY
 
-          mkdir -p project/android/signing
-
-          cp source/signing/key.properties \
-            project/android/signing/key.properties
-
-          cp source/signing/sheti-release.jks \
-            project/android/signing/sheti-release.jks
-
       - name: Get Dependencies
-        working-directory: project
+        working-directory: app
         run: |
           flutter clean
           flutter pub get
 
       - name: Build V26 Release APK
-        working-directory: project
+        working-directory: app
         run: |
           flutter build apk --release --split-per-abi
 
       - name: Verify APK
         run: |
-          APK="project/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          APK="app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
           test -s "$APK"
           mkdir -p release
           cp "$APK" release/Sheti_V4_26_ARM64.apk
