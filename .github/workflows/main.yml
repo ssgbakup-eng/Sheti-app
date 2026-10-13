@@ -33,7 +33,6 @@ jobs:
           test -f Sheti_V4_26.zip
           mkdir -p source
           unzip -q Sheti_V4_26.zip -d source
-
           test -f source/pubspec.yaml
           test -f source/lib/main.dart
           test -f source/signing/key.properties
@@ -43,11 +42,11 @@ jobs:
         run: |
           flutter create \
             --platforms=android \
-            --org com.example \
             --project-name sheti_app \
             project
 
           cp source/pubspec.yaml project/pubspec.yaml
+
           rm -rf project/lib
           cp -r source/lib project/lib
 
@@ -56,19 +55,39 @@ jobs:
             cp -r source/assets/. project/assets/
           fi
 
-      - name: Configure Dependencies
-        working-directory: project
-        run: |
-          cat >> pubspec.yaml <<'EOF'
-
-          dependency_overrides:
-            image: 4.3.0
-            archive: 3.6.1
-          EOF
-
-      - name: Configure Android Signing
+      - name: Configure Android
         shell: bash
         run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("project/android/app/build.gradle.kts")
+          if not p.exists():
+              raise SystemExit("Android Gradle Kotlin file missing")
+
+          s = p.read_text()
+
+          if "compileOptions {" not in s:
+              raise SystemExit("compileOptions block missing")
+
+          s = s.replace(
+              "JavaVersion.VERSION_1_8",
+              "JavaVersion.VERSION_17"
+          )
+
+          s = s.replace(
+              "jvmTarget = JavaVersion.VERSION_1_8.toString()",
+              'jvmTarget = "17"'
+          )
+
+          s = s.replace(
+              "jvmTarget = \"1.8\"",
+              'jvmTarget = "17"'
+          )
+
+          p.write_text(s)
+          PY
+
           mkdir -p project/android/signing
 
           cp source/signing/key.properties \
@@ -76,72 +95,6 @@ jobs:
 
           cp source/signing/sheti-release.jks \
             project/android/signing/sheti-release.jks
-
-          cat > project/android/app/build.gradle <<'GRADLE'
-          import java.util.Properties
-
-          plugins {
-              id 'com.android.application'
-              id 'org.jetbrains.kotlin.android'
-              id 'dev.flutter.flutter-gradle-plugin'
-          }
-
-          def signingProperties = new Properties()
-          def signingFile = rootProject.file("signing/key.properties")
-
-          if (!signingFile.exists()) {
-              throw new GradleException("Signing properties missing")
-          }
-
-          signingFile.withInputStream {
-              signingProperties.load(it)
-          }
-
-          android {
-              namespace "com.example.sheti_app"
-              compileSdk 35
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-
-              defaultConfig {
-                  applicationId "com.example.sheti_app"
-                  minSdk 23
-                  targetSdk 35
-                  versionCode 26
-                  versionName "4.4.0"
-              }
-
-              signingConfigs {
-                  release {
-                      storeFile rootProject.file(
-                          signingProperties.getProperty("storeFile")
-                      )
-                      storePassword signingProperties.getProperty("storePassword")
-                      keyAlias signingProperties.getProperty("keyAlias")
-                      keyPassword signingProperties.getProperty("keyPassword")
-                  }
-              }
-
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.release
-                  }
-              }
-          }
-
-          flutter {
-              source "../.."
-          }
-          GRADLE
-
-          rm -f project/android/app/build.gradle.kts
 
       - name: Get Dependencies
         working-directory: project
@@ -157,8 +110,7 @@ jobs:
       - name: Verify APK
         run: |
           APK="project/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-          test -f "$APK"
-
+          test -s "$APK"
           mkdir -p release
           cp "$APK" release/Sheti_V4_26_ARM64.apk
 
