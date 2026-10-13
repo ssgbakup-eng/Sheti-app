@@ -28,126 +28,38 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: "3.35.2"
           channel: stable
           cache: true
 
       - name: Extract V26 Source
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          if [ ! -f Sheti_V4_26.zip ]; then
-            echo "ERROR: Sheti_V4_26.zip not found"
-            exit 1
-          fi
+          test -f Sheti_V4_26.zip
 
-          mkdir -p extracted
-          unzip -q Sheti_V4_26.zip -d extracted
+          rm -rf source
+          mkdir -p source
+          unzip -q Sheti_V4_26.zip -d source
 
-          PROJECT_DIR=""
+          PROJECT_DIR="source"
 
-          while IFS= read -r file; do
-            dir="$(dirname "$file")"
-
-            if [ -d "$dir/android" ]; then
-              PROJECT_DIR="$dir"
-              break
-            fi
-          done < <(find extracted -type f -name pubspec.yaml)
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Flutter project with android folder not found"
-            echo "ZIP folder structure:"
-            find extracted -maxdepth 6 -type d | head -150
-            exit 1
-          fi
+          test -f "$PROJECT_DIR/pubspec.yaml"
+          test -f "$PROJECT_DIR/lib/main.dart"
+          test -f "$PROJECT_DIR/signing/app_build.gradle"
+          test -s "$PROJECT_DIR/signing/key.properties"
+          test -s "$PROJECT_DIR/signing/sheti-release.jks"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Flutter project: $PROJECT_DIR"
 
-          ls -la "$PROJECT_DIR"
-          ls -la "$PROJECT_DIR/android"
-
-      - name: Verify Existing Android Project
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-
-          if [ -f android/app/build.gradle.kts ]; then
-            echo "Gradle file: build.gradle.kts"
-          elif [ -f android/app/build.gradle ]; then
-            echo "Gradle file: build.gradle"
-          else
-            echo "ERROR: Android app Gradle file missing"
-            exit 1
-          fi
-
-          if [ ! -f pubspec.yaml ]; then
-            echo "ERROR: pubspec.yaml missing"
-            exit 1
-          fi
-
-          echo "Existing Android project verified."
-
-      - name: Preserve Existing Signing Files
-        shell: bash
-        run: |
-          set -e
-
-          KEY_FILE="$(find extracted -type f \
-            -name sheti-release.jks | head -n 1 || true)"
-
-          PROPS_FILE="$(find extracted -type f \
-            -path '*/signing/key.properties' | head -n 1 || true)"
-
-          if [ -z "$KEY_FILE" ] || [ -z "$PROPS_FILE" ]; then
-            echo "ERROR: Original signing files not found in V26 ZIP."
-            echo "Cannot safely generate an update APK."
-            exit 1
-          fi
-
-          mkdir -p "$PROJECT_DIR/android/signing"
-
-          cp "$KEY_FILE" \
-            "$PROJECT_DIR/android/signing/sheti-release.jks"
-
-          cp "$PROPS_FILE" \
-            "$PROJECT_DIR/android/signing/key.properties"
-
-          echo "Original signing files copied."
-
-      - name: Verify Package and Signing Configuration
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-
-          if [ -f android/app/build.gradle.kts ]; then
-            GRADLE_FILE="android/app/build.gradle.kts"
-          else
-            GRADLE_FILE="android/app/build.gradle"
-          fi
-
-          echo "Checking: $GRADLE_FILE"
-
-          if ! grep -q 'com.example.sheti_app' "$GRADLE_FILE"; then
-            echo "ERROR: Expected application ID not found."
-            echo "Expected: com.example.sheti_app"
-            exit 1
-          fi
-
-          if ! grep -qi 'signingConfig' "$GRADLE_FILE"; then
-            echo "ERROR: Release signing configuration not found."
-            exit 1
-          fi
-
-          echo "Application ID and signing configuration checked."
+          echo "V26 source verified."
+          find "$PROJECT_DIR" -maxdepth 2 -type f | sort
 
       - name: Set V26 Version
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd "$PROJECT_DIR"
 
           python3 - <<'PY'
@@ -155,61 +67,236 @@ jobs:
           import re
 
           p = Path("pubspec.yaml")
-          text = p.read_text(encoding="utf-8")
+          s = p.read_text(encoding="utf-8")
 
-          version = "version: 4.4.0+26"
+          s, count = re.subn(
+              r"(?m)^version\s*:.*$",
+              "version: 4.4.0+26",
+              s,
+              count=1
+          )
 
-          if re.search(r"(?m)^version\s*:", text):
-              text = re.sub(
-                  r"(?m)^version\s*:.*$",
-                  version,
-                  text,
-                  count=1
-              )
-          else:
-              text = version + "\n" + text
+          if count != 1:
+              raise SystemExit("ERROR: pubspec version field missing")
 
-          p.write_text(text, encoding="utf-8")
-          print("V26 version set: 4.4.0+26")
+          p.write_text(s, encoding="utf-8")
+
+          gradle = Path("signing/app_build.gradle")
+          g = gradle.read_text(encoding="utf-8")
+
+          g, c1 = re.subn(
+              r"(?m)^(\s*versionCode\s+)\d+",
+              r"\g<1>26",
+              g,
+              count=1
+          )
+
+          g, c2 = re.subn(
+              r'(?m)^(\s*versionName\s+")[^"]*(")',
+              r'\g<1>4.4.0\2',
+              g,
+              count=1
+          )
+
+          if c1 != 1 or c2 != 1:
+              raise SystemExit("ERROR: Android version fields missing")
+
+          gradle.write_text(g, encoding="utf-8")
+          print("V26 version verified: 4.4.0+26")
           PY
 
-      - name: Flutter Clean and Dependencies
+      - name: Generate Android Project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          flutter create . \
+            --platforms=android \
+            --org com.example
+
+          test -f android/settings.gradle
+          test -f android/app/src/main/AndroidManifest.xml
+
+          echo "Android project generated successfully."
+
+      - name: Configure Existing Release Signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          mkdir -p android/signing
+
+          cp signing/key.properties \
+            android/signing/key.properties
+
+          cp signing/sheti-release.jks \
+            android/signing/sheti-release.jks
+
+          test -s android/signing/key.properties
+          test -s android/signing/sheti-release.jks
+
+          echo "Original V26 signing files copied."
+
+      - name: Configure Android Release Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          cat > android/app/build.gradle <<'GRADLE'
+          plugins {
+              id "com.android.application"
+              id "org.jetbrains.kotlin.android"
+              id "dev.flutter.flutter-gradle-plugin"
+          }
+
+          import java.util.Properties
+
+          def signingProperties = new Properties()
+          def signingPropertiesFile =
+              rootProject.file("signing/key.properties")
+
+          if (!signingPropertiesFile.exists()) {
+              throw new GradleException(
+                  "Release signing properties missing"
+              )
+          }
+
+          signingPropertiesFile.withInputStream {
+              signingProperties.load(it)
+          }
+
+          def keystorePath =
+              signingProperties.getProperty("storeFile")
+
+          if (!keystorePath) {
+              throw new GradleException(
+                  "storeFile missing in key.properties"
+              )
+          }
+
+          def keystoreFile = rootProject.file(keystorePath)
+
+          if (!keystoreFile.exists()) {
+              throw new GradleException(
+                  "Release keystore file missing"
+              )
+          }
+
+          android {
+              namespace "com.example.sheti_app"
+              compileSdk flutter.compileSdkVersion
+              ndkVersion flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              defaultConfig {
+                  applicationId "com.example.sheti_app"
+                  minSdk 23
+                  targetSdk flutter.targetSdkVersion
+                  versionCode 26
+                  versionName "4.4.0"
+              }
+
+              signingConfigs {
+                  release {
+                      storeFile keystoreFile
+                      storePassword signingProperties.getProperty(
+                          "storePassword"
+                      )
+                      keyAlias signingProperties.getProperty(
+                          "keyAlias"
+                      )
+                      keyPassword signingProperties.getProperty(
+                          "keyPassword"
+                      )
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+
+          flutter {
+              source "../.."
+          }
+          GRADLE
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text(encoding="utf-8")
+
+          permission = (
+              '<uses-permission '
+              'android:name="android.permission.RECORD_AUDIO"/>'
+          )
+
+          if "android.permission.RECORD_AUDIO" not in s:
+              pos = s.find(">")
+              if pos < 0:
+                  raise SystemExit("Invalid AndroidManifest.xml")
+              s = s[:pos + 1] + "\n    " + permission + s[pos + 1:]
+              p.write_text(s, encoding="utf-8")
+
+          print("Android manifest checked.")
+          PY
+
+          grep -q 'applicationId "com.example.sheti_app"' \
+            android/app/build.gradle
+          grep -q 'versionCode 26' android/app/build.gradle
+          grep -q 'versionName "4.4.0"' android/app/build.gradle
+
+          echo "Package ID and version verified."
+
+      - name: Get Flutter Dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
           cd "$PROJECT_DIR"
 
           flutter --version
-          flutter clean
           flutter pub get
 
-      - name: Build V26 ARM64 Release APK
+      - name: Build V26 ARM64 APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd "$PROJECT_DIR"
+
+          flutter clean
+          flutter pub get
 
           flutter build apk \
             --release \
             --target-platform android-arm64
 
-      - name: Prepare APK Artifact
+      - name: Verify APK
         shell: bash
         run: |
-          set -e
-
-          mkdir -p release_apk
+          set -euo pipefail
 
           APK="$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk"
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: Release APK not generated."
-            find "$PROJECT_DIR/build" -type f -name '*.apk' || true
-            exit 1
-          fi
+          test -s "$APK"
+          mkdir -p release_apk
 
           cp "$APK" release_apk/Sheti_V4_26_ARM64.apk
-          ls -lh release_apk/
+
+          ls -lh release_apk/Sheti_V4_26_ARM64.apk
 
       - name: Upload V26 APK
         uses: actions/upload-artifact@v4
