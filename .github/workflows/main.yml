@@ -1,5 +1,5 @@
 
-name: Sheti App V25 APK Build
+name: Sheti App V26 APK Build
 
 on:
   workflow_dispatch:
@@ -28,49 +28,51 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract V25 Source
+      - name: Extract V26 Source
         shell: bash
         run: |
-          test -f Sheti_V4_25.zip
-          mkdir app
-          unzip -q Sheti_V4_25.zip -d app
+          test -f Sheti_V4_26.zip
 
-          test -f app/pubspec.yaml
-          test -f app/lib/main.dart
-          test -f app/signing/key.properties
-          test -f app/signing/sheti-release.jks
+          mkdir -p source
+          unzip -q Sheti_V4_26.zip -d source
 
-      - name: Create Android Project
-        working-directory: app
+          test -f source/pubspec.yaml
+          test -f source/lib/main.dart
+          test -f source/assets/fonts/Lohit-Devanagari.ttf
+          test -f source/signing/app_build.gradle
+          test -f source/signing/key.properties
+          test -f source/signing/sheti-release.jks
+
+      - name: Create Flutter Android Project
+        shell: bash
         run: |
           flutter create \
             --platforms=android \
             --org com.example \
-            .
+            --project-name sheti_app \
+            project
 
-      - name: Configure Dependencies
-        working-directory: app
-        run: |
-          cat >> pubspec.yaml <<'EOF'
+          cp source/pubspec.yaml project/pubspec.yaml
 
-          dependency_overrides:
-            image: 4.3.0
-            archive: 3.6.1
-          EOF
+          rm -rf project/lib
+          cp -r source/lib project/lib
+
+          mkdir -p project/assets/fonts
+          cp source/assets/fonts/Lohit-Devanagari.ttf \
+            project/assets/fonts/
 
       - name: Configure Android Signing
-        working-directory: app
         shell: bash
         run: |
-          mkdir -p android/signing
+          mkdir -p project/android/signing
 
-          cp signing/key.properties \
-            android/signing/key.properties
+          cp source/signing/key.properties \
+            project/android/signing/key.properties
 
-          cp signing/sheti-release.jks \
-            android/signing/sheti-release.jks
+          cp source/signing/sheti-release.jks \
+            project/android/signing/sheti-release.jks
 
-          cat > android/app/build.gradle <<'GRADLE'
+          cat > project/android/app/build.gradle <<'GRADLE'
           import java.util.Properties
 
           plugins {
@@ -94,21 +96,12 @@ jobs:
               namespace "com.example.sheti_app"
               compileSdk 35
 
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-
               defaultConfig {
                   applicationId "com.example.sheti_app"
                   minSdk 23
                   targetSdk 35
-                  versionCode 25
-                  versionName "4.3.0"
+                  versionCode 26
+                  versionName "4.4.0"
               }
 
               signingConfigs {
@@ -134,31 +127,38 @@ jobs:
           }
           GRADLE
 
-          rm -f android/app/build.gradle.kts
+          rm -f project/android/app/build.gradle.kts
+
+          test -f project/android/app/build.gradle
+          test -f project/android/signing/sheti-release.jks
 
       - name: Get Dependencies
-        working-directory: app
+        working-directory: project
         run: |
           flutter clean
           flutter pub get
 
-      - name: Build Release APK
-        working-directory: app
+      - name: Build V26 Release APK
+        working-directory: project
         run: |
-          flutter build apk --release --split-per-abi
+          flutter build apk \
+            --release \
+            --split-per-abi
 
       - name: Verify APK
+        shell: bash
         run: |
-          test -f app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          APK="project/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+
+          test -f "$APK"
 
           mkdir -p release
-          cp app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-            release/Sheti_V4_25_ARM64.apk
+          cp "$APK" release/Sheti_V4_26_ARM64.apk
 
-      - name: Upload V25 APK
+      - name: Upload V26 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V25-APK
-          path: release/Sheti_V4_25_ARM64.apk
+          name: Sheti-V26-APK
+          path: release/Sheti_V4_26_ARM64.apk
           if-no-files-found: error
           retention-days: 14
