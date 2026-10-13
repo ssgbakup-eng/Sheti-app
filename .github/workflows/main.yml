@@ -1,196 +1,31 @@
 
-name: Build Sheti V26 Release APK
-
-on:
-  workflow_dispatch:
-  push:
-    paths:
-      - "Sheti_V4_26.zip"
-      - ".github/workflows/main.yml"
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
       - name: Extract V26 Source
         shell: bash
         run: |
           set -e
-          test -f Sheti_V4_26.zip || {
-            echo "ERROR: Sheti_V4_26.zip not found"
-            exit 1
-          }
+          test -f Sheti_V4_26.zip
 
           mkdir -p extracted
           unzip -q Sheti_V4_26.zip -d extracted
 
-          PUBSPEC="$(find extracted -type f -name pubspec.yaml \
-            -not -path '*/.dart_tool/*' | head -n 1)"
+          PROJECT_DIR=""
 
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml not found in V26 ZIP"
+          while IFS= read -r file; do
+            dir="$(dirname "$file")"
+            if [ -d "$dir/android" ]; then
+              PROJECT_DIR="$dir"
+              break
+            fi
+          done < <(find extracted -type f -name pubspec.yaml)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Flutter project with android folder not found."
+            echo "ZIP folder structure:"
+            find extracted -maxdepth 5 -type d | head -100
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$PUBSPEC")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Flutter project found: $PROJECT_DIR"
-
-          if [ ! -d "$PROJECT_DIR/android" ]; then
-            echo "ERROR: Existing Android project missing."
-            echo "Not creating a new Gradle project."
-            exit 1
-          fi
-
-      - name: Verify Existing Android Project
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-
-          if [ ! -f android/app/build.gradle ] && \
-             [ ! -f android/app/build.gradle.kts ]; then
-            echo "ERROR: Existing app Gradle file missing."
-            exit 1
-          fi
-
-          echo "Existing Android/Gradle project detected."
-          echo "No flutter create command will be run."
-
-      - name: Preserve Existing Signing Files
-        shell: bash
-        run: |
-          set -e
-
-          KEY_FILE="$(find extracted -type f \
-            -name sheti-release.jks | head -n 1 || true)"
-
-          PROPS_FILE="$(find extracted -type f \
-            -path '*/signing/key.properties' | head -n 1 || true)"
-
-          if [ -z "$KEY_FILE" ] || [ -z "$PROPS_FILE" ]; then
-            echo "ERROR: Existing release signing files not found."
-            echo "Cannot safely build an update APK without the"
-            echo "original signing key and its configuration."
-            exit 1
-          fi
-
-          mkdir -p "$PROJECT_DIR/android/signing"
-          cp "$KEY_FILE" "$PROJECT_DIR/android/signing/sheti-release.jks"
-          cp "$PROPS_FILE" "$PROJECT_DIR/android/signing/key.properties"
-
-          echo "Signing files copied; existing Gradle configuration"
-          echo "will not be replaced."
-
-      - name: Verify Package and Signing Configuration
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-
-          echo "Checking application ID and release signing setup..."
-
-          if [ -f android/app/build.gradle.kts ]; then
-            GRADLE_FILE="android/app/build.gradle.kts"
-          else
-            GRADLE_FILE="android/app/build.gradle"
-          fi
-
-          cat "$GRADLE_FILE"
-
-          if ! grep -q 'com.example.sheti_app' "$GRADLE_FILE"; then
-            echo "ERROR: Expected package ID not found."
-            echo "Required: com.example.sheti_app"
-            exit 1
-          fi
-
-          if ! grep -qi 'signingConfig' "$GRADLE_FILE"; then
-            echo "ERROR: Signing configuration not detected."
-            echo "Refusing to build an APK with uncertain signing."
-            exit 1
-          fi
-
-      - name: Set V26 Version
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path("pubspec.yaml")
-          text = p.read_text(encoding="utf-8")
-
-          version_line = "version: 4.4.0+26"
-          pattern = r"(?m)^version\s*:\s*.*$"
-
-          if re.search(pattern, text):
-              text = re.sub(pattern, version_line, text, count=1)
-          else:
-              text = version_line + "\n" + text
-
-          p.write_text(text, encoding="utf-8")
-          print("V26 version set to 4.4.0+26")
-          PY
-
-      - name: Flutter Clean and Dependencies
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-          flutter --version
-          flutter clean
-          flutter pub get
-
-      - name: Build V26 ARM64 Release APK
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-          flutter build apk --release --target-platform android-arm64
-
-      - name: Prepare APK Artifact
-        shell: bash
-        run: |
-          set -e
-          mkdir -p release_apk
-
-          APK="$(find "$PROJECT_DIR/build/app/outputs/flutter-apk" \
-            -maxdepth 1 -type f -name '*release*.apk' | head -n 1)"
-
-          if [ -z "$APK" ]; then
-            echo "ERROR: Release APK not generated."
-            exit 1
-          fi
-
-          cp "$APK" release_apk/Sheti_V4_26_ARM64.apk
-          ls -lh release_apk/
-
-      - name: Upload V26 APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Sheti-V26-APK
-          path: release_apk/Sheti_V4_26_ARM64.apk
-          if-no-files-found: error
-          retention-days: 30
+          echo "Correct Flutter project: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
+          ls -la "$PROJECT_DIR/android"
