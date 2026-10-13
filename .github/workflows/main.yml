@@ -29,22 +29,17 @@ jobs:
           cache: true
 
       - name: Extract V26 Source
-        shell: bash
         run: |
           test -f Sheti_V4_26.zip
-
           mkdir -p source
           unzip -q Sheti_V4_26.zip -d source
 
           test -f source/pubspec.yaml
           test -f source/lib/main.dart
-          test -f source/assets/fonts/Lohit-Devanagari.ttf
-          test -f source/signing/app_build.gradle
           test -f source/signing/key.properties
           test -f source/signing/sheti-release.jks
 
-      - name: Create Flutter Android Project
-        shell: bash
+      - name: Create Flutter Project
         run: |
           flutter create \
             --platforms=android \
@@ -53,13 +48,23 @@ jobs:
             project
 
           cp source/pubspec.yaml project/pubspec.yaml
-
           rm -rf project/lib
           cp -r source/lib project/lib
 
-          mkdir -p project/assets/fonts
-          cp source/assets/fonts/Lohit-Devanagari.ttf \
-            project/assets/fonts/
+          if [ -d source/assets ]; then
+            mkdir -p project/assets
+            cp -r source/assets/. project/assets/
+          fi
+
+      - name: Configure Dependencies
+        working-directory: project
+        run: |
+          cat >> pubspec.yaml <<'EOF'
+
+          dependency_overrides:
+            image: 4.3.0
+            archive: 3.6.1
+          EOF
 
       - name: Configure Android Signing
         shell: bash
@@ -96,6 +101,15 @@ jobs:
               namespace "com.example.sheti_app"
               compileSdk 35
 
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
               defaultConfig {
                   applicationId "com.example.sheti_app"
                   minSdk 23
@@ -129,9 +143,6 @@ jobs:
 
           rm -f project/android/app/build.gradle.kts
 
-          test -f project/android/app/build.gradle
-          test -f project/android/signing/sheti-release.jks
-
       - name: Get Dependencies
         working-directory: project
         run: |
@@ -141,15 +152,11 @@ jobs:
       - name: Build V26 Release APK
         working-directory: project
         run: |
-          flutter build apk \
-            --release \
-            --split-per-abi
+          flutter build apk --release --split-per-abi
 
       - name: Verify APK
-        shell: bash
         run: |
           APK="project/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-
           test -f "$APK"
 
           mkdir -p release
