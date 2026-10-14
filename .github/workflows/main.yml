@@ -33,9 +33,29 @@ jobs:
           fi
 
           test -f lib/main.dart
-          test -f signing/app_build.gradle
-          test -f signing/sheti-release.jks
-          test -f signing/key.properties
+          test -f pubspec.yaml
+
+      - name: Pin compatible image dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("pubspec.yaml")
+          s = p.read_text()
+
+          if "\ndependency_overrides:" in "\n" + s:
+              raise SystemExit(
+                  "dependency_overrides already exists; "
+                  "merge the image override instead of duplicating it."
+              )
+
+          s = s.rstrip() + (
+              "\n\ndependency_overrides:\n"
+              "  image: 4.10.0\n"
+          )
+          p.write_text(s)
+          PY
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
