@@ -15,36 +15,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract V27 Source ZIP
+      - name: Extract V27 Fixed Source
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f Sheti_V4_27.zip
+          ZIP="Sheti_V4_27_JVM_FIXED.zip"
+          test -f "$ZIP"
+
           mkdir -p source
-          unzip -q Sheti_V4_27.zip -d source
+          unzip -q "$ZIP" -d source
 
           if [ -f source/pubspec.yaml ]; then
             cp -a source/. ./
-          elif [ -f source/sheti_v25_work/pubspec.yaml ]; then
-            cp -a source/sheti_v25_work/. ./
           else
-            echo "ERROR: pubspec.yaml not found in ZIP"
-            find source -name pubspec.yaml
-            exit 1
+            PUBSPEC="$(find source -name pubspec.yaml -print -quit)"
+            if [ -z "$PUBSPEC" ]; then
+              echo "ERROR: pubspec.yaml not found"
+              exit 1
+            fi
+            ROOT="$(dirname "$PUBSPEC")"
+            cp -a "$ROOT"/. ./
           fi
 
-          test -f lib/main.dart
           test -f pubspec.yaml
+          test -f lib/main.dart
           test -f signing/app_build.gradle
           test -f signing/key.properties
           test -f signing/sheti-release.jks
 
-      - name: Pin image dependency
+      - name: Fix image dependency
         shell: bash
         run: |
           set -euo pipefail
-
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -53,13 +56,10 @@ jobs:
           s = p.read_text()
 
           if re.search(r"(?m)^dependency_overrides:", s):
-              print("Existing dependency_overrides found.")
-              print("Keeping existing overrides unchanged.")
               if not re.search(
-                  r"(?m)^\s+image\s*:", s
+                  r"(?m)^  image\s*:", s
               ):
-                  s = s.rstrip() + "\n"
-                  s += "  image: 4.10.0\n"
+                  s = s.rstrip() + "\n  image: 4.10.0\n"
           else:
               s = s.rstrip()
               s += "\n\ndependency_overrides:\n"
@@ -88,7 +88,7 @@ jobs:
             --project-name sheti_app \
             --org com.example .
 
-      - name: Configure Android signing
+      - name: Configure signing and Gradle
         shell: bash
         run: |
           set -euo pipefail
@@ -97,15 +97,14 @@ jobs:
 
           cp signing/key.properties \
             android/signing/key.properties
-
           cp signing/sheti-release.jks \
             android/signing/sheti-release.jks
-
           cp signing/app_build.gradle \
             android/app/build.gradle
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path("android/app/build.gradle")
           s = p.read_text()
@@ -116,28 +115,72 @@ jobs:
           if plugin not in s:
               if marker not in s:
                   raise SystemExit(
-                      "Kotlin plugin marker not found in build.gradle"
+                      "Kotlin plugin marker missing; "
+                      "check signing/app_build.gradle"
                   )
-              s = s.replace(
-                  marker,
-                  marker + "\n    " + plugin,
-                  1
+              s = s.replace(marker, marker + "\n    " + plugin, 1)
+
+          # Normalize existing Java 8 targets.
+          s = s.replace(
+              "JavaVersion.VERSION_1_8",
+              "JavaVersion.VERSION_17"
+          )
+
+          # Set Java compile compatibility to 17.
+          if re.search(r'\bcompileOptions\s*\{', s):
+              pattern = r'\bcompileOptions\s*\{[^}]*\}'
+              m = re.search(pattern, s, re.S)
+              block = m.group(0)
+
+              for key in (
+                  "sourceCompatibility",
+                  "targetCompatibility"
+              ):
+                  line = (
+                      f"{key} JavaVersion.VERSION_17"
+                  )
+                  if re.search(rf'\b{key}\b', block):
+                      block = re.sub(
+                          rf'\b{key}\s+[^;\n]+;?',
+                          line,
+                          block
+                      )
+                  else:
+                      block = block[:-1] + "\n        " + line + "\n    }"
+
+              s = s[:m.start()] + block + s[m.end():]
+          else:
+              s = re.sub(
+                  r'\bandroid\s*\{',
+                  'android {\n    compileOptions {\n'
+                  '        sourceCompatibility JavaVersion.VERSION_17\n'
+                  '        targetCompatibility JavaVersion.VERSION_17\n'
+                  '    }\n',
+                  s, count=1
               )
 
-          if 'flutter {' not in s:
+          # Set Kotlin JVM target to 17.
+          if re.search(r'\bkotlinOptions\s*\{', s):
+              s = re.sub(
+                  r'jvmTarget\s*=\s*["\'][^"\']+["\']',
+                  'jvmTarget = "17"',
+                  s
+              )
+          else:
+              s = re.sub(
+                  r'\bandroid\s*\{',
+                  'android {\n    kotlinOptions {\n'
+                  '        jvmTarget = "17"\n'
+                  '    }\n',
+                  s, count=1
+              )
+
+          if not re.search(r'\bflutter\s*\{', s):
               s += '\n\nflutter {\n    source = "../.."\n}\n'
 
-          p.write_text(s)
-          PY
+          # Apply compatible targets to all Java/Kotlin compile tasks.
+          s += """
 
-      - name: Force Java and Kotlin JVM Target 17
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat >> android/app/build.gradle <<'GRADLE'
-
-          // Keep Java and Kotlin compilation targets consistent.
           tasks.withType(JavaCompile).configureEach {
               sourceCompatibility = '17'
               targetCompatibility = '17'
@@ -150,21 +193,17 @@ jobs:
                   jvmTarget = '17'
               }
           }
-          GRADLE
+          """
 
-          echo "Java and Kotlin target configuration added."
-          tail -n 25 android/app/build.gradle
+          p.write_text(s)
+          print("Gradle JVM configuration updated.")
+          PY
 
-      - name: Resolve dependencies
+          grep -q 'VERSION_17' android/app/build.gradle
+          grep -q 'jvmTarget = "17"' android/app/build.gradle
+
+      - name: Resolve Flutter dependencies
         run: flutter pub get
-
-      - name: Check dependency versions
-        shell: bash
-        run: |
-          set -euo pipefail
-          flutter pub deps
-          grep -A3 '^  image:' pubspec.lock
-          grep -A3 '^  archive:' pubspec.lock
 
       - name: Build Release APK
         run: |
@@ -182,7 +221,6 @@ jobs:
 
           mkdir -p release
           cp "$APK" release/Sheti_V4_27_arm64.apk
-
           sha256sum release/Sheti_V4_27_arm64.apk \
             > release/SHA256SUMS.txt
 
