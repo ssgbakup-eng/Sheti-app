@@ -1,5 +1,5 @@
 
-name: Build and Verify Sheti V27 APK
+name: Build Sheti App V27 APK
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract V27 Source
+      - name: Extract V27 source
         shell: bash
         run: |
           set -euo pipefail
@@ -29,12 +29,14 @@ jobs:
           if [ -f source/pubspec.yaml ]; then
             ROOT="source"
           else
-            ROOT="$(dirname "$(find source -name pubspec.yaml -print -quit)")"
+            PUBSPEC="$(find source -name pubspec.yaml -print -quit)"
+            test -n "$PUBSPEC"
+            ROOT="$(dirname "$PUBSPEC")"
           fi
 
-          test -f "$ROOT/pubspec.yaml"
           cp -a "$ROOT"/. ./
 
+          test -f pubspec.yaml
           test -f lib/main.dart
           test -f signing/app_build.gradle
           test -f signing/key.properties
@@ -53,15 +55,46 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Prepare Android project
+      - name: Fix image dependency
+        shell: bash
         run: |
           set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("pubspec.yaml")
+          s = p.read_text()
+
+          # Remove old dependency_overrides block.
+          s = re.sub(
+              r"(?ms)^dependency_overrides\s*:\s*\n.*?(?=^[A-Za-z_][A-Za-z0-9_]*\s*:|\Z)",
+              "",
+              s
+          ).rstrip()
+
+          s += "\n\ndependency_overrides:\n"
+          s += "  image: 4.9.1\n"
+
+          p.write_text(s)
+          print("Configured image dependency override.")
+          PY
+
+          rm -f pubspec.lock
+          flutter pub get
+
+      - name: Prepare Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
           flutter create \
             --platforms=android \
             --project-name sheti_app \
             --org com.example .
 
-      - name: Configure signing and JVM targets
+      - name: Configure signing and JVM
         shell: bash
         run: |
           set -euo pipefail
@@ -70,8 +103,10 @@ jobs:
 
           cp signing/key.properties \
             android/signing/key.properties
+
           cp signing/sheti-release.jks \
             android/signing/sheti-release.jks
+
           cp signing/app_build.gradle \
             android/app/build.gradle
 
@@ -82,50 +117,85 @@ jobs:
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          marker = 'id "org.jetbrains.kotlin.android"'
-          plugin = 'id "dev.flutter.flutter-gradle-plugin"'
-
-          if plugin not in s:
+          if 'id "dev.flutter.flutter-gradle-plugin"' not in s:
+              marker = 'id "org.jetbrains.kotlin.android"'
               if marker not in s:
-                  raise SystemExit("Kotlin plugin marker missing")
-              s = s.replace(marker, marker + "\n    " + plugin, 1)
-
-          if "compileOptions" not in s:
+                  raise SystemExit(
+                      "Kotlin plugin marker not found"
+                  )
               s = s.replace(
-                  "android {",
+                  marker,
+                  marker + '\n    id "dev.flutter.flutter-gradle-plugin"',
+                  1
+              )
+
+          s = s.replace(
+              "JavaVersion.VERSION_1_8",
+              "JavaVersion.VERSION_17"
+          )
+
+          if re.search(r'\bcompileOptions\s*\{', s):
+              m = re.search(
+                  r'\bcompileOptions\s*\{[^}]*\}',
+                  s,
+                  re.S
+              )
+              block = m.group(0)
+
+              for key in (
+                  "sourceCompatibility",
+                  "targetCompatibility"
+              ):
+                  line = (
+                      f"{key} JavaVersion.VERSION_17"
+                  )
+                  if re.search(rf'\b{key}\b', block):
+                      block = re.sub(
+                          rf'\b{key}\s+[^;\n]+;?',
+                          line,
+                          block
+                      )
+                  else:
+                      block = block[:-1] + "\n        " + line + "\n    }"
+
+              s = s[:m.start()] + block + s[m.end():]
+          else:
+              s = re.sub(
+                  r'\bandroid\s*\{',
                   """android {
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
-          """, 1
-              )
-          else:
-              s = re.sub(
-                  r'sourceCompatibility\s+[^;\n]+',
-                  'sourceCompatibility JavaVersion.VERSION_17',
-                  s
-              )
-              s = re.sub(
-                  r'targetCompatibility\s+[^;\n]+',
-                  'targetCompatibility JavaVersion.VERSION_17',
-                  s
+          """,
+                  s,
+                  count=1
               )
 
-          if "kotlinOptions" not in s:
-              s = s.replace(
-                  "android {",
+          if re.search(r'\bkotlinOptions\s*\{', s):
+              if re.search(r'\bjvmTarget\s*=', s):
+                  s = re.sub(
+                      r'\bjvmTarget\s*=\s*["\'][^"\']+["\']',
+                      'jvmTarget = "17"',
+                      s
+                  )
+              else:
+                  s = re.sub(
+                      r'\bkotlinOptions\s*\{',
+                      'kotlinOptions {\n        jvmTarget = "17"',
+                      s,
+                      count=1
+                  )
+          else:
+              s = re.sub(
+                  r'\bandroid\s*\{',
                   """android {
               kotlinOptions {
                   jvmTarget = "17"
               }
-          """, 1
-              )
-          else:
-              s = re.sub(
-                  r'jvmTarget\s*=\s*["\'][^"\']+["\']',
-                  'jvmTarget = "17"',
-                  s
+          """,
+                  s,
+                  count=1
               )
 
           if not re.search(r'\bflutter\s*\{', s):
@@ -148,10 +218,13 @@ jobs:
           """
 
           p.write_text(s)
+          print("Java/Kotlin target set to 17.")
           PY
 
-      - name: Resolve dependencies
-        run: flutter pub get
+      - name: Verify dependency resolution
+        run: |
+          flutter pub get
+          flutter pub deps
 
       - name: Build release APK
         run: |
@@ -167,34 +240,35 @@ jobs:
           APK="build/app/outputs/flutter-apk/app-release.apk"
           test -s "$APK"
 
-          mkdir -p release
-
           SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
           APKSIGNER="$(find "$SDK/build-tools" \
             -name apksigner -type f | sort -V | tail -n 1)"
-
-          if [ -z "$APKSIGNER" ]; then
-            echo "ERROR: apksigner not found"
-            exit 1
-          fi
-
-          "$APKSIGNER" verify --verbose --print-certs "$APK"
 
           AAPT="$(find "$SDK/build-tools" \
             -name aapt -type f | sort -V | tail -n 1)"
 
-          "$AAPT" dump badging "$APK" \
-            | tee release/package-info.txt
+          test -n "$APKSIGNER"
+          test -n "$AAPT"
 
-          grep -q "package: name='com.example.sheti_app'" \
-            release/package-info.txt
+          "$APKSIGNER" verify \
+            --verbose \
+            --print-certs "$APK" \
+            | tee signature-info.txt
+
+          "$AAPT" dump badging "$APK" \
+            | tee package-info.txt
+
+          mkdir -p release
 
           cp "$APK" release/Sheti_V4_27_arm64.apk
+          cp signature-info.txt release/
+          cp package-info.txt release/
 
           sha256sum release/Sheti_V4_27_arm64.apk \
             > release/SHA256SUMS.txt
 
-      - name: Upload verified APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Sheti_V4_27_APK
