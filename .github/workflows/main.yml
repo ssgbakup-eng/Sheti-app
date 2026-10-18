@@ -1,5 +1,5 @@
 
-name: Sheti App V27 APK Build
+name: Build Sheti APK
 
 on:
   workflow_dispatch:
@@ -12,14 +12,14 @@ permissions:
 
 jobs:
   build:
-    name: Build Sheti APK
+    name: Build Sheti App V27
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Locate and Extract V27 Source ZIP
+      - name: Extract V27 Source ZIP
         shell: bash
         run: |
           set -euo pipefail
@@ -27,28 +27,25 @@ jobs:
           ZIP_FILE="Sheti_V4_27_JVM_FIXED.zip"
 
           if [ -f "$ZIP_FILE" ]; then
-            mkdir -p source
-            unzip -q "$ZIP_FILE" -d source
-            if [ -f source/pubspec.yaml ]; then
-              cp -a source/. .
-            else
-              PUBSPEC="$(find source -name pubspec.yaml -type f -print -quit)"
-              if [ -z "$PUBSPEC" ]; then
-                echo "ERROR: ZIP मध्ये pubspec.yaml सापडली नाही."
-                exit 1
-              fi
-              PROJECT_DIR="$(dirname "$PUBSPEC")"
-              cp -a "$PROJECT_DIR"/. .
+            mkdir -p /tmp/sheti_source
+            unzip -q "$ZIP_FILE" -d /tmp/sheti_source
+
+            PUBSPEC="$(find /tmp/sheti_source -name pubspec.yaml -type f -print -quit)"
+            if [ -z "$PUBSPEC" ]; then
+              echo "ERROR: ZIP मध्ये pubspec.yaml सापडली नाही."
+              exit 1
             fi
-          elif [ ! -f pubspec.yaml ]; then
-            echo "ERROR: V27 ZIP किंवा root मध्ये pubspec.yaml सापडली नाही."
-            echo "Repository मध्ये ZIP चे नाव आणि स्थान तपासा."
+
+            PROJECT_DIR="$(dirname "$PUBSPEC")"
+            cp -a "$PROJECT_DIR"/. .
+          fi
+
+          if [ ! -f pubspec.yaml ]; then
+            echo "ERROR: Flutter project किंवा source ZIP सापडली नाही."
             exit 1
           fi
 
-          test -f pubspec.yaml
-          echo "Flutter project located."
-          grep -E '^[[:space:]]*image:' pubspec.yaml || true
+          echo "Flutter project found."
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -64,7 +61,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Fix Image Dependency
+      - name: Fix Image and Archive Dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -76,102 +73,101 @@ jobs:
           p = Path("pubspec.yaml")
           s = p.read_text()
 
-          # Remove only the existing image entry from dependency_overrides.
-          match = re.search(
+          # Remove existing image/archive entries from dependency_overrides.
+          pattern = (
               r"(?ms)^dependency_overrides\s*:\s*\n"
-              r"(?P<body>.*?)(?=^[A-Za-z_][A-Za-z0-9_]*\s*:|\Z)",
-              s
+              r"(.*?)(?=^[A-Za-z_][A-Za-z0-9_]*\s*:|\Z)"
           )
+          m = re.search(pattern, s)
 
-          if match:
-              body = match.group("body")
+          if m:
               body = re.sub(
-                  r"(?m)^[ \t]*image\s*:[^\n]*(?:\n|$)",
+                  r"(?m)^[ \t]*(image|archive)\s*:[^\n]*(?:\n|$)",
                   "",
-                  body
+                  m.group(1)
               )
-
               if body.strip():
                   replacement = "dependency_overrides:\n" + body
               else:
                   replacement = ""
+              s = s[:m.start()] + replacement + s[m.end():]
 
-              s = s[:match.start()] + replacement + s[match.end():]
+          s = s.rstrip()
 
-          # Add image 4.11.1 override while retaining other overrides.
-          match = re.search(
-              r"(?m)^dependency_overrides\s*:\s*$",
-              s
-          )
-
-          if match:
-              insert_at = match.end()
-              s = s[:insert_at] + "\n  image: 4.11.1" + s[insert_at:]
+          if re.search(r"(?m)^dependency_overrides\s*:", s):
+              s = re.sub(
+                  r"(?m)^dependency_overrides\s*:\s*$",
+                  "dependency_overrides:\n"
+                  "  image: 4.11.1\n"
+                  "  archive: ^4.4.0",
+                  s,
+                  count=1
+              )
           else:
-              s = s.rstrip() + "\n\ndependency_overrides:\n  image: 4.11.1\n"
+              s += (
+                  "\n\ndependency_overrides:\n"
+                  "  image: 4.11.1\n"
+                  "  archive: ^4.4.0\n"
+              )
 
           p.write_text(s)
-          print("Updated dependency_overrides:")
-          print(p.read_text())
+          print("Dependency overrides updated.")
           PY
 
-          # Re-resolve dependencies from pubspec.yaml.
           rm -f pubspec.lock
           flutter pub get
 
-      - name: Configure Android Java and Kotlin Targets
+      - name: Configure Java and Kotlin Targets
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -f android/app/build.gradle ]; then
-            FILE="android/app/build.gradle"
-            python3 - "$FILE" <<'PY'
+          GRADLE_FILE="android/app/build.gradle"
+
+          if [ -f "$GRADLE_FILE" ]; then
+            python3 - "$GRADLE_FILE" <<'PY'
           from pathlib import Path
-          import sys
           import re
+          import sys
 
           p = Path(sys.argv[1])
           s = p.read_text()
 
-          if "compileOptions" in s:
-              s = re.sub(
-                  r"(?s)compileOptions\s*\{.*?\}",
-                  """compileOptions {
+          java_block = """compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
-              }""",
+              }"""
+
+          if re.search(r"(?s)compileOptions\s*\{.*?\}", s):
+              s = re.sub(
+                  r"(?s)compileOptions\s*\{.*?\}",
+                  java_block,
                   s,
                   count=1
               )
-          else:
+          elif re.search(r"\bandroid\s*\{", s):
               s = re.sub(
-                  r"android\s*\{",
-                  """android {
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }""",
+                  r"\bandroid\s*\{",
+                  "android {\n    " + java_block,
                   s,
                   count=1
               )
 
-          if "kotlinOptions" in s:
+          kotlin_block = """kotlinOptions {
+                  jvmTarget = '17'
+              }"""
+
+          if re.search(r"(?s)kotlinOptions\s*\{.*?\}", s):
               s = re.sub(
                   r"(?s)kotlinOptions\s*\{.*?\}",
-                  """kotlinOptions {
-                  jvmTarget = '17'
-              }""",
+                  kotlin_block,
                   s,
                   count=1
               )
           else:
               s = re.sub(
-                  r"android\s*\{",
-                  """android {
-              kotlinOptions {
-                  jvmTarget = '17'
-              }""",
+                  r"\bandroid\s*\{",
+                  "android {\n    " + kotlin_block,
                   s,
                   count=1
               )
@@ -179,27 +175,13 @@ jobs:
           p.write_text(s)
           PY
           elif [ -f android/app/build.gradle.kts ]; then
-            echo "Kotlin DSL build.gradle.kts detected; keeping project configuration."
+            echo "Kotlin DSL detected; leaving its Gradle configuration unchanged."
           else
-            echo "ERROR: android/app/build.gradle not found."
+            echo "ERROR: Android app Gradle file not found."
             exit 1
           fi
 
-      - name: Configure Android Audio Permission
-        shell: bash
-        run: |
-          set -euo pipefail
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-
-          if [ -f "$MANIFEST" ]; then
-            if ! grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
-              sed -i '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' "$MANIFEST"
-            fi
-          else
-            echo "AndroidManifest.xml not found; skipping permission update."
-          fi
-
-      - name: Configure Release Signing Files
+      - name: Configure Release Signing
         shell: bash
         run: |
           set -euo pipefail
@@ -209,7 +191,6 @@ jobs:
           fi
 
           if [ -f signing/key.properties ]; then
-            mkdir -p android
             cp signing/key.properties android/key.properties
           fi
 
@@ -218,26 +199,52 @@ jobs:
             cp signing/sheti-release.jks android/app/sheti-release.jks
           fi
 
-          echo "Signing files present in repository:"
-          find signing android -maxdepth 3 -type f \
-            \( -name 'key.properties' -o -name '*.jks' -o -name 'app_build.gradle' \) \
-            -print 2>/dev/null || true
+          echo "Checking signing configuration..."
+          if [ -f android/key.properties ]; then
+            echo "key.properties found."
+          else
+            echo "WARNING: key.properties not found."
+          fi
 
-      - name: Verify Flutter Dependencies
+          if [ -f android/app/sheti-release.jks ]; then
+            echo "Release keystore found."
+          else
+            echo "WARNING: release keystore not found."
+          fi
+
+      - name: Configure Audio Permission
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if [ -f "$MANIFEST" ]; then
+            if ! grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
+              sed -i \
+                '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' \
+                "$MANIFEST"
+            fi
+          fi
+
+      - name: Resolve Flutter Dependencies
         run: flutter pub get
 
       - name: Build Release APK
         run: flutter build apk --release --target-platform android-arm64
 
-      - name: Verify APK Exists
+      - name: Check APK
         shell: bash
         run: |
           set -euo pipefail
+
           APK="build/app/outputs/flutter-apk/app-release.apk"
+
           if [ ! -f "$APK" ]; then
             echo "ERROR: APK तयार झाली नाही."
             exit 1
           fi
+
           ls -lh "$APK"
 
       - name: Verify APK Signature
@@ -246,17 +253,18 @@ jobs:
           set -euo pipefail
 
           APK="build/app/outputs/flutter-apk/app-release.apk"
-
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          APKSIGNER="$(find "$SDK_ROOT/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -n 1 || true)"
+
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" \
+            -name apksigner -type f 2>/dev/null | sort -V | tail -n 1 || true)"
 
           if [ -n "$APKSIGNER" ]; then
             "$APKSIGNER" verify --verbose "$APK"
           else
-            echo "WARNING: apksigner उपलब्ध नाही; signature verification वगळली."
+            echo "WARNING: apksigner not found; signature verification skipped."
           fi
 
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Sheti-App-V27-APK
