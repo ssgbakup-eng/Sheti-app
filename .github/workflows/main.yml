@@ -1,4 +1,4 @@
-name: Sheti App V27 Build
+name: Sheti App V25 Base V27
 
 on:
   workflow_dispatch:
@@ -9,53 +9,82 @@ jobs:
 
     steps:
 
-      # 1. Checkout
-      - name: Checkout Repository
+      # 1. Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Flutter
-      - name: Setup Flutter 3.35.2
+      # 2. Flutter 3.35.2
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.35.2
           channel: stable
           cache: true
 
-      # 3. V25 ZIP शोधून Extract
-      - name: Extract V25 Source
+      # 3. Find V25 ZIP
+      - name: Find V25 Base
         shell: bash
         run: |
           set -e
 
-          ZIP=$(find . -maxdepth 3 -type f -iname "Sheti_V4_25.zip" | head -1)
+          ZIP=$(find . -type f -name "Sheti_V4_25.zip" | head -1)
 
           if [ -z "$ZIP" ]; then
             echo "ERROR: Sheti_V4_25.zip not found"
             exit 1
           fi
 
-          echo "V25 Source: $ZIP"
-
           rm -rf sheti_v25
-          mkdir sheti_v25
+          mkdir -p sheti_v25
 
           unzip -q "$ZIP" -d sheti_v25
 
-          # ZIP मध्ये एक extra folder असल्यास तो शोधा
-          if [ -f "sheti_v25/pubspec.yaml" ]; then
-            PROJECT="sheti_v25"
-          else
-            PROJECT=$(find sheti_v25 -type f -name "pubspec.yaml" -printf '%h\n' | head -1)
-          fi
+          PROJECT=$(find sheti_v25 \
+            -type f \
+            -name "pubspec.yaml" \
+            -printf '%h\n' | head -1)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: pubspec.yaml not found"
+            echo "ERROR: V25 pubspec.yaml not found"
             exit 1
           fi
 
-          echo "PROJECT=$PROJECT" >> $GITHUB_ENV
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
 
-      # 4. V25 मध्ये Android Project तयार
+          echo "========================================"
+          echo "V25 BASE FOUND"
+          echo "PROJECT: $PROJECT"
+          echo "========================================"
+
+      # 4. Read V25 Application ID
+      - name: Read V25 Application ID
+        shell: bash
+        run: |
+          set -e
+
+          APP_GRADLE="$PROJECT/signing/app_build.gradle"
+
+          if [ ! -f "$APP_GRADLE" ]; then
+            echo "ERROR: signing/app_build.gradle not found"
+            exit 1
+          fi
+
+          APP_ID=$(grep -oE \
+            'applicationId[[:space:]]*(=)?[[:space:]]*["'\''][^"'\'']+["'\'']' \
+            "$APP_GRADLE" \
+            | head -1 \
+            | sed -E 's/.*["'\'']([^"'\'']+)["'\''].*/\1/')
+
+          if [ -z "$APP_ID" ]; then
+            echo "ERROR: V25 Application ID not found"
+            exit 1
+          fi
+
+          echo "APP_ID=$APP_ID" >> "$GITHUB_ENV"
+
+          echo "V25 APPLICATION ID = $APP_ID"
+
+      # 5. Create fresh Android project
       - name: Create Android Project
         shell: bash
         run: |
@@ -72,11 +101,14 @@ jobs:
             --org com.sheti \
             .
 
-          test -d android
+          if [ ! -d "android" ]; then
+            echo "ERROR: Android project creation failed"
+            exit 1
+          fi
 
-          echo "Android project created successfully"
+          echo "Android project created"
 
-      # 5. V25 Signing Files सुरक्षित ठेवणे
+      # 6. Restore V25 signing files
       - name: Restore V25 Signing
         shell: bash
         run: |
@@ -84,222 +116,171 @@ jobs:
 
           cd "$PROJECT"
 
-          if [ ! -d "signing" ]; then
-            echo "ERROR: V25 signing folder not found"
-            exit 1
-          fi
+          test -f signing/key.properties
+          test -f signing/sheti-release.jks
 
           mkdir -p android/signing
 
-          cp -f signing/* android/signing/ 2>/dev/null || true
+          cp -f signing/key.properties \
+            android/signing/key.properties
 
-          # दोन्ही ठिकाणी signing folder ठेवतो
-          cp -f signing/* android/ 2>/dev/null || true
+          cp -f signing/sheti-release.jks \
+            android/signing/sheti-release.jks
 
           echo "V25 signing files restored"
 
-      # 6. V25 App ID शोधणे
-      - name: Read V25 App Information
+      # 7. Configure generated Android app
+      - name: Configure Android App
         shell: bash
+        env:
+          V25_APP_ID: ${{ env.APP_ID }}
         run: |
           set -e
 
           cd "$PROJECT"
 
-          APP_GRADLE="signing/app_build.gradle"
-
-          if [ ! -f "$APP_GRADLE" ]; then
-            echo "ERROR: signing/app_build.gradle not found"
-            exit 1
-          fi
-
-          APP_ID=$(grep -oE 'applicationId[[:space:]]+["'\''][^"'\'']+["'\'']' "$APP_GRADLE" \
-            | head -1 \
-            | sed -E 's/.*["'\'']([^"'\'']+)["'\''].*/\1/')
-
-          if [ -z "$APP_ID" ]; then
-            echo "ERROR: Application ID not found"
-            exit 1
-          fi
-
-          echo "APP_ID=$APP_ID" >> $GITHUB_ENV
-
-          echo "================================"
-          echo "V25 BASE"
-          echo "Application ID: $APP_ID"
-          echo "Target Version Code: 27"
-          echo "Target Version Name: 4.27.0"
-          echo "================================"
-
-      # 7. V25 Signing app_build.gradle वापरणे
-      - name: Apply V25 App Gradle
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT"
-
-          cp -f signing/app_build.gradle android/app/build.gradle
-
-          # Flutter Gradle plugin आवश्यक असल्यास जोडणे
-          if ! grep -q "dev.flutter.flutter-gradle-plugin" android/app/build.gradle; then
-            sed -i '1i plugins {\n    id "com.android.application"\n    id "org.jetbrains.kotlin.android"\n    id "dev.flutter.flutter-gradle-plugin"\n}\n' android/app/build.gradle
-          fi
-
-      # 8. Android Gradle Configuration
-      - name: Configure Android Gradle
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT"
-
-          cat > android/settings.gradle <<'EOF'
-pluginManagement {
-    def flutterSdkPath = {
-        def properties = new Properties()
-        file("local.properties").withInputStream { properties.load(it) }
-        def flutterSdkPath = properties.getProperty("flutter.sdk")
-        assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
-        return flutterSdkPath
-    }()
-
-    includeBuild("${flutterSdkPath}/packages/flutter_tools/gradle")
-
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-
-plugins {
-    id "dev.flutter.flutter-plugin-loader" version "1.0.0"
-    id "com.android.application" version "8.7.3" apply false
-    id "org.jetbrains.kotlin.android" version "2.1.0" apply false
-}
-
-include ":app"
-EOF
-
-          cat > android/build.gradle <<'EOF'
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-
-rootProject.buildDir = "../build"
-
-subprojects {
-    project.buildDir = "${rootProject.buildDir}/${project.name}"
-}
-
-subprojects {
-    project.evaluationDependsOn(":app")
-}
-
-tasks.register("clean", Delete) {
-    delete rootProject.buildDir
-}
-EOF
-
-          cat > android/gradle.properties <<'EOF'
-org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G -XX:+HeapDumpOnOutOfMemoryError
-android.useAndroidX=true
-android.enableJetifier=true
-EOF
-
-      # 9. Flutter block + Version 27
-      - name: Configure App Version
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT"
-
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
+          import os
           import re
 
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
+          app_id = os.environ["V25_APP_ID"]
 
+          path = Path("android/app/build.gradle")
+          text = path.read_text()
+
+          # --------------------------------
           # Application ID
-          s = re.sub(
+          # --------------------------------
+          text, count = re.subn(
               r'applicationId\s+["\'][^"\']+["\']',
-              'applicationId "' + "${APP_ID}" + '"',
-              s,
+              f'applicationId "{app_id}"',
+              text,
               count=1
           )
 
+          if count == 0:
+              raise SystemExit("ERROR: applicationId not found")
+
+          # --------------------------------
           # Version Code
-          s = re.sub(
+          # --------------------------------
+          text, count = re.subn(
               r'versionCode\s+[^\n]+',
               'versionCode 27',
-              s,
+              text,
               count=1
           )
 
+          if count == 0:
+              raise SystemExit("ERROR: versionCode not found")
+
+          # --------------------------------
           # Version Name
-          s = re.sub(
+          # --------------------------------
+          text, count = re.subn(
               r'versionName\s+[^\n]+',
               'versionName "4.27.0"',
-              s,
+              text,
               count=1
           )
 
-          # Flutter block
-          if "flutter {" not in s:
-              s += '''
+          if count == 0:
+              raise SystemExit("ERROR: versionName not found")
 
-flutter {
-    source = "../.."
-}
-'''
+          # --------------------------------
+          # V25 Signing Configuration
+          # --------------------------------
+          signing_block = r'''
+              signingConfigs {
+                  release {
+                      def kp = new Properties()
+                      def kpFile = rootProject.file("signing/key.properties")
 
-          p.write_text(s)
+                      if (kpFile.exists()) {
+                          kp.load(new FileInputStream(kpFile))
+
+                          storeFile = rootProject.file(
+                              "signing/sheti-release.jks"
+                          )
+
+                          storePassword = kp["storePassword"]
+                          keyAlias = kp["keyAlias"]
+                          keyPassword = kp["keyPassword"]
+                      }
+                  }
+              }
+
+          '''
+
+          if "signingConfigs {" not in text:
+              marker = "    buildTypes {"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ERROR: buildTypes block not found"
+                  )
+
+              text = text.replace(
+                  marker,
+                  signing_block + marker,
+                  1
+              )
+
+          # --------------------------------
+          # Release must use V25 key
+          # --------------------------------
+          text = text.replace(
+              "signingConfig signingConfigs.debug",
+              "signingConfig signingConfigs.release"
+          )
+
+          path.write_text(text)
+
+          print("========================================")
+          print("ANDROID APP CONFIGURED")
+          print("Application ID :", app_id)
+          print("Version Code   : 27")
+          print("Version Name   : 4.27.0")
+          print("Signing        : V25")
+          print("========================================")
           PY
 
-          echo "Version Code = 27"
-          echo "Version Name = 4.27.0"
-
-      # 10. Image dependency fix
-      - name: Fix Flutter Image Dependency
+      # 8. Dependency configuration
+      - name: Configure Flutter Dependencies
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT"
 
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
           import re
 
-          p = Path("pubspec.yaml")
-          s = p.read_text()
+          path = Path("pubspec.yaml")
+          text = path.read_text()
 
-          # जुना dependency_overrides block काढा
-          s = re.sub(
+          # Remove existing dependency_overrides block
+          text = re.sub(
               r'\ndependency_overrides:\n(?:^[ \t]+.*\n?)*',
               '\n',
-              s,
+              text,
               flags=re.MULTILINE
           )
 
-          s = s.rstrip() + '''
+          text = text.rstrip() + """
 
-dependency_overrides:
-  image: 4.11.1
-'''
+          dependency_overrides:
+            image: 4.11.1
+          """
 
-          p.write_text(s)
+          path.write_text(text)
           PY
 
           rm -f pubspec.lock
 
-      # 11. Dependencies
+      # 9. Flutter dependencies
       - name: Flutter Pub Get
         shell: bash
         run: |
@@ -310,8 +291,8 @@ dependency_overrides:
           flutter clean
           flutter pub get
 
-      # 12. App ID / Version अंतिम तपासणी
-      - name: Verify App Information
+      # 10. Final configuration check
+      - name: Final Configuration Check
         shell: bash
         run: |
           set -e
@@ -320,16 +301,22 @@ dependency_overrides:
 
           echo ""
           echo "========================================"
-          echo "FINAL APP INFORMATION"
+          echo "FINAL CONFIGURATION"
           echo "========================================"
 
-          grep -E "applicationId|versionCode|versionName" \
-            android/app/build.gradle || true
+          grep -E \
+            "applicationId|versionCode|versionName" \
+            android/app/build.gradle
 
+          echo ""
+          echo "BASE       : V25"
+          echo "BUILD      : V27"
+          echo "SIGNING    : V25"
+          echo "ARCH       : ARM64"
           echo "========================================"
 
-      # 13. APK Build
-      - name: Build V27 APK
+      # 11. Build ARM64 APK
+      - name: Build Release APK
         shell: bash
         run: |
           set -e
@@ -340,38 +327,195 @@ dependency_overrides:
             --release \
             --target-platform android-arm64
 
-      # 14. APK Rename
-      - name: Rename APK
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not created"
+            exit 1
+          fi
+
+          echo "APK CREATED SUCCESSFULLY"
+          ls -lh "$APK"
+
+      # 12. APK package check
+      - name: Verify APK Package
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT"
 
-          cp build/app/outputs/flutter-apk/app-release.apk \
-             "$GITHUB_WORKSPACE/Sheti_V27_Update.apk"
+          APK="build/app/outputs/flutter-apk/app-release.apk"
 
-          ls -lh "$GITHUB_WORKSPACE/Sheti_V27_Update.apk"
+          AAPT=$(find "$ANDROID_HOME/build-tools" \
+            -name aapt \
+            | sort -V \
+            | tail -1)
 
-      # 15. APK Signature Check
+          if [ -z "$AAPT" ]; then
+            echo "ERROR: aapt not found"
+            exit 1
+          fi
+
+          "$AAPT" dump badging "$APK" | head -5
+
+          PACKAGE=$(
+            "$AAPT" dump badging "$APK" \
+            | sed -n "s/package: name='\([^']*\)'.*/\1/p" \
+            | head -1
+          )
+
+          if [ "$PACKAGE" != "${APP_ID}" ]; then
+            echo "ERROR: APK PACKAGE DOES NOT MATCH V25 APP ID"
+            echo "Expected: ${APP_ID}"
+            echo "Found:    $PACKAGE"
+            exit 1
+          fi
+
+          echo "APK PACKAGE = V25 APP ID MATCH"
+
+      # 13. APK alignment
+      - name: Verify APK Alignment
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT"
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" \
+            -name zipalign \
+            | sort -V \
+            | tail -1)
+
+          "$ZIPALIGN" -c -v 4 "$APK"
+
+          echo "APK ZIPALIGN = OK"
+
+      # 14. APK signature
       - name: Verify APK Signature
         shell: bash
         run: |
           set -e
 
-          APK="$GITHUB_WORKSPACE/Sheti_V27_Update.apk"
+          cd "$PROJECT"
 
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
+            -name apksigner \
+            | sort -V \
+            | tail -1)
+
+          "$APKSIGNER" verify --verbose "$APK"
+
+          echo "APK SIGNATURE = OK"
+
+      # 15. Compare V25 JKS certificate with APK certificate
+      - name: Verify V25 Certificate
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT"
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          JKS="android/signing/sheti-release.jks"
+          KP="android/signing/key.properties"
+
+          test -f "$JKS"
+          test -f "$KP"
+
+          STORE_PASSWORD=$(
+            grep '^storePassword=' "$KP" \
+            | head -1 \
+            | cut -d'=' -f2-
+          )
+
+          KEY_ALIAS=$(
+            grep '^keyAlias=' "$KP" \
+            | head -1 \
+            | cut -d'=' -f2-
+          )
+
+          if [ -z "$STORE_PASSWORD" ]; then
+            echo "ERROR: storePassword not found"
+            exit 1
+          fi
+
+          if [ -z "$KEY_ALIAS" ]; then
+            echo "ERROR: keyAlias not found"
+            exit 1
+          fi
+
+          JKS_CERT=$(
+            keytool -list -v \
+              -keystore "$JKS" \
+              -storepass "$STORE_PASSWORD" \
+              -alias "$KEY_ALIAS" 2>/dev/null \
+            | grep -i "SHA256:" \
+            | head -1 \
+            | sed 's/.*SHA256:[[:space:]]*//'
+          )
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
+            -name apksigner \
+            | sort -V \
+            | tail -1)
+
+          APK_CERT=$(
+            "$APKSIGNER" verify \
+              --print-certs \
+              "$APK" 2>/dev/null \
+            | grep -i \
+              "Signer #1 certificate SHA-256 digest:" \
+            | sed 's/.*digest:[[:space:]]*//'
+          )
+
+          JKS_CERT=$(echo "$JKS_CERT" \
+            | tr -d ' ' \
+            | tr '[:lower:]' '[:upper:]')
+
+          APK_CERT=$(echo "$APK_CERT" \
+            | tr -d ' ' \
+            | tr '[:lower:]' '[:upper:]')
+
+          echo "V25 certificate fingerprint found"
+          echo "APK certificate fingerprint found"
+
+          if [ -z "$JKS_CERT" ] || [ -z "$APK_CERT" ]; then
+            echo "ERROR: Certificate fingerprint unavailable"
+            exit 1
+          fi
+
+          if [ "$JKS_CERT" != "$APK_CERT" ]; then
+            echo ""
+            echo "========================================"
+            echo "ERROR: V25 SIGNING CERTIFICATE MISMATCH"
+            echo "========================================"
+            exit 1
+          fi
+
+          echo ""
           echo "========================================"
-          echo "APK SIGNATURE CHECK"
+          echo "V25 CERTIFICATE = MATCH"
           echo "========================================"
 
-          $ANDROID_HOME/build-tools/35.0.0/apksigner verify \
-            --verbose \
-            "$APK"
+      # 16. Final APK
+      - name: Prepare Verified APK
+        shell: bash
+        run: |
+          set -e
 
-          echo "APK signature verification PASSED"
+          cp \
+            "$PROJECT/build/app/outputs/flutter-apk/app-release.apk" \
+            "$GITHUB_WORKSPACE/Sheti_V27_arm64.apk"
 
-      # 16. Final Information
+          ls -lh \
+            "$GITHUB_WORKSPACE/Sheti_V27_arm64.apk"
+
+      # 17. Build information
       - name: Create Build Information
         shell: bash
         run: |
@@ -391,21 +535,26 @@ dependency_overrides:
           4.27.0
 
           SIGNING:
-          V25 signing folder used
+          V25 sheti-release.jks
+
+          ARCHITECTURE:
+          ARM64
+
+          VERIFIED:
+          APK Package = OK
+          APK Alignment = OK
+          APK Signature = OK
+          V25 Certificate = MATCH
 
           APK:
-          Sheti_V27_Update.apk
-
-          UPDATE:
-          Same Application ID + V25 signing key
-          Version Code increased to 27
+          Sheti_V27_arm64.apk
           EOF
 
-      # 17. Upload APK
-      - name: Upload V27 APK
+      # 18. Upload only verified files
+      - name: Upload Verified APK
         uses: actions/upload-artifact@v4
         with:
           name: Sheti-V27-APK
           path: |
-            Sheti_V27_Update.apk
+            Sheti_V27_arm64.apk
             Sheti_V27_Build_Info.txt
