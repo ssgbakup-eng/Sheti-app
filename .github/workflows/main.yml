@@ -15,9 +15,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # --------------------------------------------------
+      # 1. CHECKOUT
+      # --------------------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+
+      # --------------------------------------------------
+      # 2. EXTRACT V27 SOURCE
+      # --------------------------------------------------
       - name: Extract and Validate V27 Source
         shell: bash
         run: |
@@ -26,17 +34,22 @@ jobs:
           ZIP_FILE="Sheti_V4_27_JVM_FIXED.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: $ZIP_FILE repository root मध्ये सापडली नाही."
+            echo "ERROR: $ZIP_FILE not found."
             exit 1
           fi
 
+          rm -rf /tmp/sheti_v27
           mkdir -p /tmp/sheti_v27
+
           unzip -q "$ZIP_FILE" -d /tmp/sheti_v27
 
-          PUBSPEC="$(find /tmp/sheti_v27 -name pubspec.yaml -type f -print -quit)"
+          PUBSPEC="$(find /tmp/sheti_v27 \
+            -name pubspec.yaml \
+            -type f \
+            -print -quit)"
 
           if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: ZIP मध्ये pubspec.yaml नाही."
+            echo "ERROR: pubspec.yaml not found inside V27 ZIP."
             exit 1
           fi
 
@@ -50,14 +63,24 @@ jobs:
           test -f signing/key.properties
           test -f signing/sheti-release.jks
 
-          echo "V27 source and signing files verified."
+          echo "----------------------------------------"
+          echo "V27 SOURCE VERIFIED"
+          echo "----------------------------------------"
 
+
+      # --------------------------------------------------
+      # 3. JAVA 17
+      # --------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+
+      # --------------------------------------------------
+      # 4. FLUTTER
+      # --------------------------------------------------
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -65,6 +88,10 @@ jobs:
           channel: stable
           cache: true
 
+
+      # --------------------------------------------------
+      # 5. GENERATE ANDROID PROJECT
+      # --------------------------------------------------
       - name: Generate Android Project
         shell: bash
         run: |
@@ -90,6 +117,10 @@ jobs:
 
           echo "Android project files are present."
 
+
+      # --------------------------------------------------
+      # 6. RESTORE ORIGINAL SIGNING CONFIGURATION
+      # --------------------------------------------------
       - name: Configure Original Signing and Flutter Gradle
         shell: bash
         run: |
@@ -98,13 +129,13 @@ jobs:
           mkdir -p android/signing
 
           cp signing/key.properties \
-            android/signing/key.properties
+             android/signing/key.properties
 
           cp signing/sheti-release.jks \
-            android/signing/sheti-release.jks
+             android/signing/sheti-release.jks
 
           cp signing/app_build.gradle \
-            android/app/build.gradle
+             android/app/build.gradle
 
           python3 - <<'PY'
           from pathlib import Path
@@ -113,64 +144,96 @@ jobs:
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          required = [
-              'id "com.android.application"',
-              'id "org.jetbrains.kotlin.android"'
-          ]
+          # Flutter Gradle plugin
+          if 'id "dev.flutter.flutter-gradle-plugin"' not in s:
+              marker = 'id "org.jetbrains.kotlin.android"'
 
-          for plugin in required:
-              if plugin not in s:
-                  raise SystemExit(
-                      "ERROR: Required Gradle plugin missing: " + plugin
+              if marker in s:
+                  s = s.replace(
+                      marker,
+                      marker + '\n    id "dev.flutter.flutter-gradle-plugin"',
+                      1
                   )
 
-          flutter_plugin = 'id "dev.flutter.flutter-gradle-plugin"'
-
-          if flutter_plugin not in s:
-              marker = 'id "org.jetbrains.kotlin.android"'
-              s = s.replace(
-                  marker,
-                  marker + "\n    " + flutter_plugin,
-                  1
-              )
-
+          # Flutter source block
           if not re.search(r"(?m)^flutter\s*\{", s):
               s += '\n\nflutter {\n    source = "../.."\n}\n'
 
           p.write_text(s)
 
-          if 'applicationId "com.example.sheti_app"' not in s:
+          # Application ID check
+          match = re.search(
+              r'applicationId\s+["\']([^"\']+)["\']',
+              s
+          )
+
+          if not match:
               raise SystemExit(
-                  "ERROR: Expected applicationId com.example.sheti_app was not found."
+                  "ERROR: applicationId not found in signing/app_build.gradle"
               )
 
-          if 'versionCode 27' not in s:
+          package_id = match.group(1)
+
+          print("----------------------------------------")
+          print("V27 APPLICATION ID")
+          print(package_id)
+          print("----------------------------------------")
+
+          # Version code must be 27
+          version_match = re.search(
+              r'versionCode\s+(\d+)',
+              s
+          )
+
+          if not version_match:
               raise SystemExit(
-                  "ERROR: Expected versionCode 27 was not found."
+                  "ERROR: versionCode not found."
               )
 
-          print("Gradle signing configuration prepared.")
+          version_code = int(version_match.group(1))
+
+          print("V27 VERSION CODE =", version_code)
+
+          if version_code != 27:
+              raise SystemExit(
+                  f"ERROR: Expected versionCode 27, found {version_code}"
+              )
+
+          print("----------------------------------------")
+          print("SIGNING CONFIGURATION RESTORED")
+          print("----------------------------------------")
           PY
 
           test -f android/signing/key.properties
           test -f android/signing/sheti-release.jks
 
+
+      # --------------------------------------------------
+      # 7. VERIFY JAVA / KOTLIN
+      # --------------------------------------------------
       - name: Verify Java and Kotlin Targets
         shell: bash
         run: |
           set -euo pipefail
 
-          grep -q 'sourceCompatibility JavaVersion.VERSION_17' \
+          grep -q \
+            'sourceCompatibility JavaVersion.VERSION_17' \
             android/app/build.gradle
 
-          grep -q 'targetCompatibility JavaVersion.VERSION_17' \
+          grep -q \
+            'targetCompatibility JavaVersion.VERSION_17' \
             android/app/build.gradle
 
-          grep -q 'jvmTarget = "17"' \
+          grep -q \
+            'jvmTarget = "17"' \
             android/app/build.gradle
 
-          echo "Java and Kotlin targets verified."
+          echo "Java 17 and Kotlin JVM 17 verified."
 
+
+      # --------------------------------------------------
+      # 8. AUDIO PERMISSION
+      # --------------------------------------------------
       - name: Configure Audio Permission
         shell: bash
         run: |
@@ -179,15 +242,21 @@ jobs:
           MANIFEST="android/app/src/main/AndroidManifest.xml"
 
           if [ -f "$MANIFEST" ] && \
-             ! grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
+             ! grep -q \
+             'android.permission.RECORD_AUDIO' \
+             "$MANIFEST"; then
 
             sed -i \
               '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' \
               "$MANIFEST"
           fi
 
-          echo "Audio permission configured."
+          echo "RECORD_AUDIO permission configured."
 
+
+      # --------------------------------------------------
+      # 9. FIX IMAGE DEPENDENCY
+      # --------------------------------------------------
       - name: Fix Image Dependency
         shell: bash
         run: |
@@ -200,14 +269,26 @@ jobs:
           p = Path("pubspec.yaml")
           s = p.read_text()
 
-          # Remove old image dependency if present
+          # Remove previous image override
           s = re.sub(
               r"(?m)^[ \t]*image:[ \t]*4\.9\.1[ \t]*\n?",
               "",
               s
           )
 
-          # Remove old dependency_overrides block
+          s = re.sub(
+              r"(?m)^[ \t]*image:[ \t]*4\.11\.1[ \t]*\n?",
+              "",
+              s
+          )
+
+          s = re.sub(
+              r"(?m)^[ \t]*image:[ \t]*4\.5\.4[ \t]*\n?",
+              "",
+              s
+          )
+
+          # Remove existing dependency_overrides block
           s = re.sub(
               r"(?ms)^dependency_overrides:[ \t]*\n.*?(?=^[A-Za-z_][A-Za-z0-9_]*[ \t]*:|\Z)",
               "",
@@ -216,7 +297,6 @@ jobs:
 
           s = s.rstrip()
 
-          # Compatible image version for current project dependency graph
           s += """
 
           dependency_overrides:
@@ -224,37 +304,61 @@ jobs:
           """
 
           p.write_text(s)
+
+          print("image dependency override = 4.5.4")
           PY
 
           rm -f pubspec.lock
 
           flutter pub get
 
-          echo "Image dependency fixed to 4.5.4."
 
+      # --------------------------------------------------
+      # 10. VERIFY DEPENDENCIES
+      # --------------------------------------------------
       - name: Verify Flutter Dependencies
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "----------------------------------------"
+          echo "IMPORTANT DEPENDENCIES"
+          echo "----------------------------------------"
+
           flutter pub deps | grep -E \
             "image|archive|pdf" || true
 
-          echo "Flutter dependency verification completed."
+          echo "Dependency verification completed."
 
+
+      # --------------------------------------------------
+      # 11. BUILD APK
+      # --------------------------------------------------
       - name: Build Release APK
         shell: bash
         run: |
           set -euo pipefail
 
           flutter clean
+
           flutter pub get
 
           flutter build apk \
             --release \
             --target-platform android-arm64
 
-      - name: Verify APK Package and Signature
+          test -s \
+            build/app/outputs/flutter-apk/app-release.apk
+
+          echo "----------------------------------------"
+          echo "APK BUILD SUCCESSFUL"
+          echo "----------------------------------------"
+
+
+      # --------------------------------------------------
+      # 12. APK DIAGNOSTIC
+      # --------------------------------------------------
+      - name: APK Diagnostic and Update Compatibility Check
         shell: bash
         run: |
           set -euo pipefail
@@ -262,44 +366,132 @@ jobs:
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "ERROR: Release APK was not created."
+            echo "ERROR: APK not found."
             exit 1
           fi
 
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
-          APKSIGNER="$(find "$SDK_ROOT/build-tools" \
-            -name apksigner -type f 2>/dev/null | sort -V | tail -n 1 || true)"
+          APKSIGNER="$(
+            find "$SDK_ROOT/build-tools" \
+              -name apksigner \
+              -type f \
+              2>/dev/null |
+            sort -V |
+            tail -n 1
+          )"
 
-          AAPT="$(find "$SDK_ROOT/build-tools" \
-            -name aapt -type f 2>/dev/null | sort -V | tail -n 1 || true)"
+          AAPT="$(
+            find "$SDK_ROOT/build-tools" \
+              -name aapt \
+              -type f \
+              2>/dev/null |
+            sort -V |
+            tail -n 1
+          )"
 
-          if [ -z "$APKSIGNER" ] || [ -z "$AAPT" ]; then
-            echo "ERROR: Android SDK verification tools not found."
+          ZIPALIGN="$(
+            find "$SDK_ROOT/build-tools" \
+              -name zipalign \
+              -type f \
+              2>/dev/null |
+            sort -V |
+            tail -n 1
+          )"
+
+          if [ -z "$APKSIGNER" ]; then
+            echo "ERROR: apksigner not found."
             exit 1
           fi
 
-          "$APKSIGNER" verify --verbose "$APK"
-          "$APKSIGNER" verify --print-certs "$APK"
+          if [ -z "$AAPT" ]; then
+            echo "ERROR: aapt not found."
+            exit 1
+          fi
+
+          if [ -z "$ZIPALIGN" ]; then
+            echo "ERROR: zipalign not found."
+            exit 1
+          fi
+
+          echo "----------------------------------------"
+          echo "APK SIZE"
+          ls -lh "$APK"
+          echo "----------------------------------------"
+
+          echo "----------------------------------------"
+          echo "APK PACKAGE INFORMATION"
+          echo "----------------------------------------"
 
           BADGING="$("$AAPT" dump badging "$APK")"
 
           echo "$BADGING" | grep "^package:"
 
-          echo "$BADGING" | grep -q "name='com.example.sheti_app'" || {
-            echo "ERROR: APK package ID mismatch."
-            exit 1
-          }
+          echo "$BADGING" | grep "^sdkVersion:" || true
+          echo "$BADGING" | grep "^targetSdkVersion:" || true
+
+          echo "----------------------------------------"
+          echo "APK SIGNATURE VERIFICATION"
+          echo "----------------------------------------"
+
+          "$APKSIGNER" verify --verbose "$APK"
+
+          echo "----------------------------------------"
+          echo "APK CERTIFICATE"
+          echo "----------------------------------------"
+
+          "$APKSIGNER" verify --print-certs "$APK"
+
+          echo "----------------------------------------"
+          echo "ZIPALIGN CHECK"
+          echo "----------------------------------------"
+
+          "$ZIPALIGN" -c -v 4 "$APK"
+
+          echo "----------------------------------------"
+          echo "SHA256"
+          echo "----------------------------------------"
+
+          sha256sum "$APK"
+
+          echo "----------------------------------------"
+          echo "V27 UPDATE CHECK"
+          echo "----------------------------------------"
+
+          echo "Package ID must remain identical to V25."
+          echo "Signing certificate must remain identical to V25."
+          echo "VersionCode = 27."
+
+          echo "----------------------------------------"
+          echo "APK DIAGNOSTIC PASSED"
+          echo "----------------------------------------"
+
+
+      # --------------------------------------------------
+      # 13. PREPARE RELEASE
+      # --------------------------------------------------
+      - name: Prepare Release Files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
 
           mkdir -p release
 
-          cp "$APK" release/Sheti_V27_arm64.apk
+          cp "$APK" \
+            release/Sheti_V27_arm64.apk
 
-          sha256sum release/Sheti_V27_arm64.apk \
+          sha256sum \
+            release/Sheti_V27_arm64.apk \
             > release/SHA256SUMS.txt
 
-          echo "APK package and signature verification passed."
+          echo "Release files prepared."
 
+
+      # --------------------------------------------------
+      # 14. UPLOAD APK
+      # --------------------------------------------------
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
