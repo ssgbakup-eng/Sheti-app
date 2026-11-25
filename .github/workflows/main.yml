@@ -200,12 +200,14 @@ jobs:
           p = Path("pubspec.yaml")
           s = p.read_text()
 
+          # Remove old image dependency if present
           s = re.sub(
               r"(?m)^[ \t]*image:[ \t]*4\.9\.1[ \t]*\n?",
               "",
               s
           )
 
+          # Remove old dependency_overrides block
           s = re.sub(
               r"(?ms)^dependency_overrides:[ \t]*\n.*?(?=^[A-Za-z_][A-Za-z0-9_]*[ \t]*:|\Z)",
               "",
@@ -214,10 +216,11 @@ jobs:
 
           s = s.rstrip()
 
+          # Compatible image version for current project dependency graph
           s += """
 
           dependency_overrides:
-            image: 4.11.1
+            image: 4.5.4
           """
 
           p.write_text(s)
@@ -227,7 +230,7 @@ jobs:
 
           flutter pub get
 
-          echo "Image dependency fixed to 4.11.1."
+          echo "Image dependency fixed to 4.5.4."
 
       - name: Verify Flutter Dependencies
         shell: bash
@@ -235,7 +238,7 @@ jobs:
           set -euo pipefail
 
           flutter pub deps | grep -E \
-            "image|archive" || true
+            "image|archive|pdf" || true
 
           echo "Flutter dependency verification completed."
 
