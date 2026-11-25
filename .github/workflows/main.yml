@@ -1,4 +1,4 @@
-name: Build Sheti APK V25 Base
+name: Build Sheti APK from V25
 
 on:
   workflow_dispatch:
@@ -16,16 +16,13 @@ jobs:
 
     steps:
 
-      # --------------------------------------------------
-      # 1. CHECKOUT
-      # --------------------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
 
 
-      # --------------------------------------------------
-      # 2. EXTRACT V25 ONLY
-      # --------------------------------------------------
+      # ==================================================
+      # V25 SOURCE
+      # ==================================================
       - name: Extract V25 Source
         shell: bash
         run: |
@@ -33,10 +30,10 @@ jobs:
 
           ZIP_FILE="Sheti_V4_25.zip"
 
-          if [ ! -f "$ZIP_FILE" ]; then
+          test -f "$ZIP_FILE" || {
             echo "ERROR: $ZIP_FILE not found."
             exit 1
-          fi
+          }
 
           rm -rf /tmp/sheti_v25
           mkdir -p /tmp/sheti_v25
@@ -48,15 +45,14 @@ jobs:
             -type f \
             -print -quit)"
 
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml not found inside V25 ZIP."
+          test -n "$PUBSPEC" || {
+            echo "ERROR: pubspec.yaml not found."
             exit 1
-          fi
+          }
 
           V25_DIR="$(dirname "$PUBSPEC")"
 
-          echo "V25 PROJECT:"
-          echo "$V25_DIR"
+          echo "V25 source: $V25_DIR"
 
           cp -a "$V25_DIR"/. "$GITHUB_WORKSPACE"/
 
@@ -68,91 +64,67 @@ jobs:
           test -f signing/key.properties
           test -f signing/sheti-release.jks
 
-          echo "V25 source verified successfully."
 
-
-      # --------------------------------------------------
-      # 3. READ V25 APP VERSION
-      # --------------------------------------------------
-      - name: Read V25 App Version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          VERSION_LINE="$(grep -E '^version:' pubspec.yaml | head -n 1)"
-
-          if [ -z "$VERSION_LINE" ]; then
-            echo "ERROR: version not found in pubspec.yaml"
-            exit 1
-          fi
-
-          VERSION="$(echo "$VERSION_LINE" | sed 's/^version:[[:space:]]*//')"
-
-          echo "V25_VERSION=$VERSION" >> "$GITHUB_ENV"
-
-          echo "================================"
-          echo "V25 APP VERSION"
-          echo "$VERSION"
-          echo "================================"
-
-
-      # --------------------------------------------------
-      # 4. READ V25 PACKAGE ID
-      # --------------------------------------------------
-      - name: Read V25 Package ID
+      # ==================================================
+      # READ V25 INFORMATION
+      # ==================================================
+      - name: Read V25 App Information
         shell: bash
         run: |
           set -euo pipefail
 
           GRADLE="signing/app_build.gradle"
 
-          PACKAGE_ID="$(grep -E 'applicationId[[:space:]]+' "$GRADLE" \
+          PACKAGE_ID="$(
+            grep -E 'applicationId[[:space:]]+' "$GRADLE" \
             | head -n 1 \
-            | sed -E 's/.*applicationId[[:space:]]+"([^"]+)".*/\1/')"
+            | sed -E 's/.*applicationId[[:space:]]+"([^"]+)".*/\1/'
+          )"
 
-          if [ -z "$PACKAGE_ID" ]; then
-            echo "ERROR: applicationId not found in signing/app_build.gradle"
+          VERSION_CODE="$(
+            grep -E 'versionCode[[:space:]]+' "$GRADLE" \
+            | head -n 1 \
+            | sed -E 's/.*versionCode[[:space:]]+([0-9]+).*/\1/'
+          )"
+
+          VERSION_NAME="$(
+            grep -E '^version:' pubspec.yaml \
+            | head -n 1 \
+            | sed 's/^version:[[:space:]]*//'
+          )"
+
+          test -n "$PACKAGE_ID" || {
+            echo "ERROR: V25 Package ID not found."
             exit 1
-          fi
+          }
+
+          test -n "$VERSION_CODE" || {
+            echo "ERROR: V25 Version Code not found."
+            exit 1
+          }
+
+          test -n "$VERSION_NAME" || {
+            echo "ERROR: V25 Version not found."
+            exit 1
+          }
 
           echo "V25_PACKAGE_ID=$PACKAGE_ID" >> "$GITHUB_ENV"
-
-          echo "================================"
-          echo "V25 PACKAGE ID"
-          echo "$PACKAGE_ID"
-          echo "================================"
-
-
-      # --------------------------------------------------
-      # 5. READ V25 VERSION CODE
-      # --------------------------------------------------
-      - name: Read V25 Version Code
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GRADLE="signing/app_build.gradle"
-
-          VERSION_CODE="$(grep -E 'versionCode[[:space:]]+' "$GRADLE" \
-            | head -n 1 \
-            | sed -E 's/.*versionCode[[:space:]]+([0-9]+).*/\1/')"
-
-          if [ -z "$VERSION_CODE" ]; then
-            echo "ERROR: versionCode not found."
-            exit 1
-          fi
-
           echo "V25_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "V25_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
 
-          echo "================================"
-          echo "V25 VERSION CODE"
-          echo "$VERSION_CODE"
-          echo "================================"
+          echo ""
+          echo "======================================"
+          echo "V25 APP INFORMATION"
+          echo "======================================"
+          echo "Package ID   : $PACKAGE_ID"
+          echo "Version Code : $VERSION_CODE"
+          echo "Version      : $VERSION_NAME"
+          echo "======================================"
 
 
-      # --------------------------------------------------
-      # 6. SET JAVA 17
-      # --------------------------------------------------
+      # ==================================================
+      # JAVA
+      # ==================================================
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
@@ -160,9 +132,9 @@ jobs:
           java-version: '17'
 
 
-      # --------------------------------------------------
-      # 7. SET FLUTTER
-      # --------------------------------------------------
+      # ==================================================
+      # FLUTTER
+      # ==================================================
       - name: Setup Flutter 3.35.2
         uses: subosito/flutter-action@v2
         with:
@@ -171,41 +143,41 @@ jobs:
           cache: true
 
 
-      # --------------------------------------------------
-      # 8. CREATE ANDROID PROJECT
-      # --------------------------------------------------
+      # ==================================================
+      # CREATE ANDROID PROJECT IN TEMP LOCATION
+      # ==================================================
       - name: Create Android Project
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf /tmp/flutter_android_template
+
+          mkdir -p /tmp/flutter_android_template
+
           flutter create \
             --platforms=android \
             --project-name sheti_app \
             --org com.example \
-            .
+            /tmp/flutter_android_template
+
+          test -d /tmp/flutter_android_template/android
+
+          rm -rf android
+
+          cp -a \
+            /tmp/flutter_android_template/android \
+            ./android
 
           test -f android/app/build.gradle
-          test -f android/gradle/wrapper/gradle-wrapper.properties
+          test -f android/settings.gradle
 
-          echo "Android project created."
-
-
-      # --------------------------------------------------
-      # 9. BACKUP GENERATED GRADLE
-      # --------------------------------------------------
-      - name: Backup Generated Android Gradle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cp android/app/build.gradle \
-            /tmp/generated_build.gradle
+          echo "Android project successfully created."
 
 
-      # --------------------------------------------------
-      # 10. COPY V25 SIGNING FILES
-      # --------------------------------------------------
+      # ==================================================
+      # APPLY V25 SIGNING
+      # ==================================================
       - name: Apply V25 Signing Configuration
         shell: bash
         run: |
@@ -226,12 +198,12 @@ jobs:
           test -f android/signing/sheti-release.jks
           test -f android/app/build.gradle
 
-          echo "V25 signing files copied."
+          echo "V25 signing files applied."
 
 
-      # --------------------------------------------------
-      # 11. MAKE SURE FLUTTER GRADLE PLUGIN EXISTS
-      # --------------------------------------------------
+      # ==================================================
+      # ENSURE FLUTTER GRADLE PLUGIN
+      # ==================================================
       - name: Ensure Flutter Gradle Plugin
         shell: bash
         run: |
@@ -243,25 +215,23 @@ jobs:
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          flutter_plugin = 'id "dev.flutter.flutter-gradle-plugin"'
+          plugin = 'id "dev.flutter.flutter-gradle-plugin"'
 
-          if flutter_plugin not in s:
-              marker = 'id "org.jetbrains.kotlin.android"'
-
-              if marker in s:
+          if plugin not in s:
+              if 'id "org.jetbrains.kotlin.android"' in s:
                   s = s.replace(
-                      marker,
-                      marker + "\n    " + flutter_plugin,
+                      'id "org.jetbrains.kotlin.android"',
+                      'id "org.jetbrains.kotlin.android"\n    ' + plugin,
                       1
                   )
               else:
                   s = s.replace(
                       'plugins {',
-                      'plugins {\n    ' + flutter_plugin,
+                      'plugins {\n    ' + plugin,
                       1
                   )
 
-          if 'flutter {' not in s:
+          if "flutter {" not in s:
               s += """
 
           flutter {
@@ -270,15 +240,13 @@ jobs:
           """
 
           p.write_text(s)
-
-          print("Flutter Gradle plugin verified.")
           PY
 
 
-      # --------------------------------------------------
-      # 12. FORCE JAVA / KOTLIN 17
-      # --------------------------------------------------
-      - name: Configure Java and Kotlin 17
+      # ==================================================
+      # JAVA / KOTLIN 17
+      # ==================================================
+      - name: Configure Java Kotlin 17
         shell: bash
         run: |
           set -euo pipefail
@@ -289,7 +257,7 @@ jobs:
           p = Path("android/app/build.gradle")
           s = p.read_text()
 
-          if "compileOptions" not in s:
+          if "sourceCompatibility JavaVersion.VERSION_17" not in s:
               s += """
 
           android {
@@ -300,7 +268,7 @@ jobs:
           }
           """
 
-          if "kotlinOptions" not in s:
+          if 'jvmTarget = "17"' not in s:
               s += """
 
           kotlinOptions {
@@ -309,14 +277,12 @@ jobs:
           """
 
           p.write_text(s)
-
-          print("Java/Kotlin 17 configuration completed.")
           PY
 
 
-      # --------------------------------------------------
-      # 13. AUDIO PERMISSION
-      # --------------------------------------------------
+      # ==================================================
+      # AUDIO PERMISSION
+      # ==================================================
       - name: Configure Audio Permission
         shell: bash
         run: |
@@ -324,40 +290,29 @@ jobs:
 
           MANIFEST="android/app/src/main/AndroidManifest.xml"
 
-          if [ -f "$MANIFEST" ]; then
-
-            if ! grep -q \
-              "android.permission.RECORD_AUDIO" \
-              "$MANIFEST"; then
-
-              sed -i \
-                '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' \
-                "$MANIFEST"
-
-            fi
-
+          if ! grep -q "android.permission.RECORD_AUDIO" "$MANIFEST"; then
+            sed -i \
+              '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' \
+              "$MANIFEST"
           fi
 
-          echo "Audio permission verified."
 
-
-      # --------------------------------------------------
-      # 14. CHECK PACKAGE ID / VERSION
-      # --------------------------------------------------
+      # ==================================================
+      # VERIFY IDENTITY
+      # ==================================================
       - name: Verify V25 Identity
         shell: bash
         run: |
           set -euo pipefail
 
           echo ""
-          echo "=============================================="
-          echo "          V25 APP INFORMATION"
-          echo "=============================================="
-          echo "App Version   : $V25_VERSION"
-          echo "Version Code  : $V25_VERSION_CODE"
-          echo "Package ID    : $V25_PACKAGE_ID"
-          echo "=============================================="
-          echo ""
+          echo "======================================"
+          echo "V25 IDENTITY CHECK"
+          echo "======================================"
+          echo "Package ID   : $V25_PACKAGE_ID"
+          echo "Version Code : $V25_VERSION_CODE"
+          echo "Version      : $V25_VERSION_NAME"
+          echo "======================================"
 
           grep -q \
             "applicationId \"$V25_PACKAGE_ID\"" \
@@ -367,12 +322,10 @@ jobs:
             "versionCode $V25_VERSION_CODE" \
             android/app/build.gradle
 
-          echo "V25 identity verified."
 
-
-      # --------------------------------------------------
-      # 15. FLUTTER PUB GET
-      # --------------------------------------------------
+      # ==================================================
+      # DEPENDENCIES
+      # ==================================================
       - name: Flutter Pub Get
         shell: bash
         run: |
@@ -382,9 +335,9 @@ jobs:
           flutter pub get
 
 
-      # --------------------------------------------------
-      # 16. BUILD APK
-      # --------------------------------------------------
+      # ==================================================
+      # BUILD
+      # ==================================================
       - name: Build Release APK
         shell: bash
         run: |
@@ -395,51 +348,39 @@ jobs:
             --target-platform android-arm64
 
 
-      # --------------------------------------------------
-      # 17. VERIFY APK
-      # --------------------------------------------------
-      - name: Verify APK Package
+      # ==================================================
+      # VERIFY APK
+      # ==================================================
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
 
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: APK was not created."
+          test -s "$APK" || {
+            echo "ERROR: APK not created."
             exit 1
-          fi
+          }
 
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
-          APKSIGNER="$(find "$SDK_ROOT/build-tools" \
-            -name apksigner \
-            -type f \
-            2>/dev/null \
-            | sort -V \
-            | tail -n 1 || true)"
+          APKSIGNER="$(
+            find "$SDK_ROOT/build-tools" \
+              -name apksigner \
+              -type f 2>/dev/null \
+            | sort -V | tail -n 1
+          )"
 
-          AAPT="$(find "$SDK_ROOT/build-tools" \
-            -name aapt \
-            -type f \
-            2>/dev/null \
-            | sort -V \
-            | tail -n 1 || true)"
+          AAPT="$(
+            find "$SDK_ROOT/build-tools" \
+              -name aapt \
+              -type f 2>/dev/null \
+            | sort -V | tail -n 1
+          )"
 
-          if [ -z "$APKSIGNER" ]; then
-            echo "ERROR: apksigner not found."
-            exit 1
-          fi
-
-          if [ -z "$AAPT" ]; then
-            echo "ERROR: aapt not found."
-            exit 1
-          fi
-
-          echo ""
-          echo "=============================================="
-          echo "          APK INFORMATION"
-          echo "=============================================="
+          test -n "$APKSIGNER"
+          test -n "$AAPT"
 
           "$APKSIGNER" verify --verbose "$APK"
 
@@ -465,35 +406,31 @@ jobs:
             | head -n 1
           )"
 
-          echo "APK Package ID   : $APK_PACKAGE"
-          echo "APK Version Code : $APK_VERSION_CODE"
-          echo "APK Version Name : $APK_VERSION_NAME"
+          echo ""
+          echo "======================================"
+          echo "FINAL APK INFORMATION"
+          echo "======================================"
+          echo "Package ID   : $APK_PACKAGE"
+          echo "Version Code : $APK_VERSION_CODE"
+          echo "Version      : $APK_VERSION_NAME"
+          echo "======================================"
 
           if [ "$APK_PACKAGE" != "$V25_PACKAGE_ID" ]; then
-            echo ""
-            echo "ERROR: PACKAGE ID CHANGED!"
-            echo "Expected: $V25_PACKAGE_ID"
-            echo "Actual  : $APK_PACKAGE"
+            echo "ERROR: Package ID changed."
             exit 1
           fi
 
           if [ "$APK_VERSION_CODE" != "$V25_VERSION_CODE" ]; then
-            echo ""
-            echo "ERROR: VERSION CODE MISMATCH!"
-            echo "Expected: $V25_VERSION_CODE"
-            echo "Actual  : $APK_VERSION_CODE"
+            echo "ERROR: Version Code changed."
             exit 1
           fi
 
           "$APKSIGNER" verify --print-certs "$APK"
 
-          echo ""
-          echo "APK PACKAGE AND SIGNATURE VERIFIED."
 
-
-      # --------------------------------------------------
-      # 18. SAVE APP INFO
-      # --------------------------------------------------
+      # ==================================================
+      # APP INFO
+      # ==================================================
       - name: Create App Info
         shell: bash
         run: |
@@ -502,26 +439,23 @@ jobs:
           mkdir -p release
 
           cat > release/APP_INFO.txt <<EOF
-          SHETI APP - V25 BASE BUILD
+          SHETI APP V25 BASE
 
-          App Version   : $V25_VERSION
-          Version Code  : $V25_VERSION_CODE
-          Package ID    : $V25_PACKAGE_ID
+          Package ID   : $V25_PACKAGE_ID
+          Version Code : $V25_VERSION_CODE
+          Version      : $V25_VERSION_NAME
 
-          Base Source   : Sheti_V4_25.zip
-          Flutter       : 3.35.2
-          Java           : 17
+          Source       : Sheti_V4_25.zip
+          Flutter      : 3.35.2
+          Java         : 17
 
-          This APK is built from V25 Base.
-          V25 signing files are preserved.
+          V25 signing files preserved.
           EOF
 
-          cat release/APP_INFO.txt
 
-
-      # --------------------------------------------------
-      # 19. COPY APK
-      # --------------------------------------------------
+      # ==================================================
+      # COPY APK
+      # ==================================================
       - name: Prepare APK
         shell: bash
         run: |
@@ -536,10 +470,10 @@ jobs:
             > release/SHA256SUMS.txt
 
 
-      # --------------------------------------------------
-      # 20. UPLOAD APK
-      # --------------------------------------------------
-      - name: Upload APK Artifact
+      # ==================================================
+      # UPLOAD
+      # ==================================================
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Sheti-V25-Base-APK
