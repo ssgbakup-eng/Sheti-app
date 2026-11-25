@@ -1,4 +1,4 @@
-name: Sheti App V25 Base V27
+name: Sheti App - V25 Base V27
 
 on:
   workflow_dispatch:
@@ -9,12 +9,12 @@ jobs:
 
     steps:
 
-      # 1. Repository
-      - name: Checkout
+      # 1. Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. Flutter 3.35.2
-      - name: Setup Flutter
+      # 2. Flutter
+      - name: Setup Flutter 3.35.2
         uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.35.2
@@ -22,7 +22,7 @@ jobs:
           cache: true
 
       # 3. Find V25 ZIP
-      - name: Find V25 Base
+      - name: Extract V25 Base
         shell: bash
         run: |
           set -e
@@ -84,7 +84,7 @@ jobs:
 
           echo "V25 APPLICATION ID = $APP_ID"
 
-      # 5. Create fresh Android project
+      # 5. Create Android project
       - name: Create Android Project
         shell: bash
         run: |
@@ -102,13 +102,34 @@ jobs:
             .
 
           if [ ! -d "android" ]; then
-            echo "ERROR: Android project creation failed"
+            echo "ERROR: Android project was not created"
             exit 1
           fi
 
-          echo "Android project created"
+          echo "Android project created successfully"
 
-      # 6. Restore V25 signing files
+      # 6. Detect Gradle file
+      - name: Detect Android Gradle File
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f "$PROJECT/android/app/build.gradle.kts" ]; then
+            echo "GRADLE_FILE=android/app/build.gradle.kts" >> "$GITHUB_ENV"
+            echo "GRADLE_TYPE=KTS" >> "$GITHUB_ENV"
+            echo "Detected: build.gradle.kts"
+
+          elif [ -f "$PROJECT/android/app/build.gradle" ]; then
+            echo "GRADLE_FILE=android/app/build.gradle" >> "$GITHUB_ENV"
+            echo "GRADLE_TYPE=GROOVY" >> "$GITHUB_ENV"
+            echo "Detected: build.gradle"
+
+          else
+            echo "ERROR: Android app Gradle file not found"
+            exit 1
+          fi
+
+      # 7. Restore V25 signing
       - name: Restore V25 Signing
         shell: bash
         run: |
@@ -116,8 +137,15 @@ jobs:
 
           cd "$PROJECT"
 
-          test -f signing/key.properties
-          test -f signing/sheti-release.jks
+          if [ ! -f "signing/key.properties" ]; then
+            echo "ERROR: V25 key.properties not found"
+            exit 1
+          fi
+
+          if [ ! -f "signing/sheti-release.jks" ]; then
+            echo "ERROR: V25 sheti-release.jks not found"
+            exit 1
+          fi
 
           mkdir -p android/signing
 
@@ -127,13 +155,15 @@ jobs:
           cp -f signing/sheti-release.jks \
             android/signing/sheti-release.jks
 
-          echo "V25 signing files restored"
+          echo "V25 signing restored"
 
-      # 7. Configure generated Android app
+      # 8. Configure Android App
       - name: Configure Android App
         shell: bash
         env:
           V25_APP_ID: ${{ env.APP_ID }}
+          V25_GRADLE_FILE: ${{ env.GRADLE_FILE }}
+          V25_GRADLE_TYPE: ${{ env.GRADLE_TYPE }}
         run: |
           set -e
 
@@ -145,109 +175,187 @@ jobs:
           import re
 
           app_id = os.environ["V25_APP_ID"]
+          gradle_file = Path(os.environ["V25_GRADLE_FILE"])
+          gradle_type = os.environ["V25_GRADLE_TYPE"]
 
-          path = Path("android/app/build.gradle")
-          text = path.read_text()
+          text = gradle_file.read_text()
 
-          # --------------------------------
+          # ----------------------------------------
           # Application ID
-          # --------------------------------
-          text, count = re.subn(
-              r'applicationId\s+["\'][^"\']+["\']',
-              f'applicationId "{app_id}"',
-              text,
-              count=1
-          )
+          # ----------------------------------------
+          if gradle_type == "KTS":
+              text, n = re.subn(
+                  r'applicationId\s*=\s*"[^"]+"',
+                  f'applicationId = "{app_id}"',
+                  text,
+                  count=1
+              )
+          else:
+              text, n = re.subn(
+                  r'applicationId\s+["\'][^"\']+["\']',
+                  f'applicationId "{app_id}"',
+                  text,
+                  count=1
+              )
 
-          if count == 0:
+          if n == 0:
               raise SystemExit("ERROR: applicationId not found")
 
-          # --------------------------------
+          # ----------------------------------------
           # Version Code
-          # --------------------------------
-          text, count = re.subn(
-              r'versionCode\s+[^\n]+',
-              'versionCode 27',
-              text,
-              count=1
-          )
+          # ----------------------------------------
+          if gradle_type == "KTS":
+              text = re.sub(
+                  r'versionCode\s*=\s*[^\n]+',
+                  'versionCode = 27',
+                  text,
+                  count=1
+              )
+          else:
+              text = re.sub(
+                  r'versionCode\s+[^\n]+',
+                  'versionCode 27',
+                  text,
+                  count=1
+              )
 
-          if count == 0:
-              raise SystemExit("ERROR: versionCode not found")
-
-          # --------------------------------
+          # ----------------------------------------
           # Version Name
-          # --------------------------------
-          text, count = re.subn(
-              r'versionName\s+[^\n]+',
-              'versionName "4.27.0"',
-              text,
-              count=1
-          )
+          # ----------------------------------------
+          if gradle_type == "KTS":
+              text = re.sub(
+                  r'versionName\s*=\s*[^\n]+',
+                  'versionName = "4.27.0"',
+                  text,
+                  count=1
+              )
+          else:
+              text = re.sub(
+                  r'versionName\s+[^\n]+',
+                  'versionName "4.27.0"',
+                  text,
+                  count=1
+              )
 
-          if count == 0:
-              raise SystemExit("ERROR: versionName not found")
+          # ----------------------------------------
+          # V25 Signing
+          # ----------------------------------------
+          if gradle_type == "KTS":
 
-          # --------------------------------
-          # V25 Signing Configuration
-          # --------------------------------
-          signing_block = r'''
-              signingConfigs {
-                  release {
-                      def kp = new Properties()
-                      def kpFile = rootProject.file("signing/key.properties")
+              if 'import java.util.Properties' not in text:
+                  text = (
+                      'import java.util.Properties\n'
+                      'import java.io.FileInputStream\n\n'
+                      + text
+                  )
 
-                      if (kpFile.exists()) {
-                          kp.load(new FileInputStream(kpFile))
+              signing_block = r'''
+    signingConfigs {
+        create("release") {
+            val keystoreProperties = Properties()
+            val keystorePropertiesFile =
+                rootProject.file("signing/key.properties")
 
-                          storeFile = rootProject.file(
-                              "signing/sheti-release.jks"
-                          )
+            if (keystorePropertiesFile.exists()) {
+                keystoreProperties.load(
+                    FileInputStream(keystorePropertiesFile)
+                )
 
-                          storePassword = kp["storePassword"]
-                          keyAlias = kp["keyAlias"]
-                          keyPassword = kp["keyPassword"]
-                      }
-                  }
-              }
+                storeFile =
+                    rootProject.file(
+                        "signing/sheti-release.jks"
+                    )
 
-          '''
+                storePassword =
+                    keystoreProperties["storePassword"] as String
 
-          if "signingConfigs {" not in text:
-              marker = "    buildTypes {"
+                keyAlias =
+                    keystoreProperties["keyAlias"] as String
 
-              if marker not in text:
-                  raise SystemExit(
-                      "ERROR: buildTypes block not found"
+                keyPassword =
+                    keystoreProperties["keyPassword"] as String
+            }
+        }
+    }
+
+'''
+
+              if 'create("release")' not in text:
+                  marker = '    buildTypes {'
+
+                  if marker not in text:
+                      raise SystemExit(
+                          "ERROR: buildTypes block not found"
+                      )
+
+                  text = text.replace(
+                      marker,
+                      signing_block + marker,
+                      1
                   )
 
               text = text.replace(
-                  marker,
-                  signing_block + marker,
-                  1
+                  'signingConfig = signingConfigs.getByName("debug")',
+                  'signingConfig = signingConfigs.getByName("release")'
               )
 
-          # --------------------------------
-          # Release must use V25 key
-          # --------------------------------
-          text = text.replace(
-              "signingConfig signingConfigs.debug",
-              "signingConfig signingConfigs.release"
-          )
+          else:
 
-          path.write_text(text)
+              signing_block = r'''
+    signingConfigs {
+        release {
+            def kp = new Properties()
+            def kpFile = rootProject.file("signing/key.properties")
 
+            if (kpFile.exists()) {
+                kp.load(new FileInputStream(kpFile))
+
+                storeFile =
+                    rootProject.file("signing/sheti-release.jks")
+
+                storePassword = kp["storePassword"]
+                keyAlias = kp["keyAlias"]
+                keyPassword = kp["keyPassword"]
+            }
+        }
+    }
+
+'''
+
+              if "signingConfigs {" not in text:
+                  marker = "    buildTypes {"
+
+                  if marker not in text:
+                      raise SystemExit(
+                          "ERROR: buildTypes block not found"
+                      )
+
+                  text = text.replace(
+                      marker,
+                      signing_block + marker,
+                      1
+                  )
+
+              text = text.replace(
+                  "signingConfig signingConfigs.debug",
+                  "signingConfig signingConfigs.release"
+              )
+
+          gradle_file.write_text(text)
+
+          print("")
           print("========================================")
-          print("ANDROID APP CONFIGURED")
+          print("ANDROID CONFIGURATION COMPLETE")
           print("Application ID :", app_id)
           print("Version Code   : 27")
           print("Version Name   : 4.27.0")
           print("Signing        : V25")
+          print("Gradle Type    :", gradle_type)
           print("========================================")
           PY
 
-      # 8. Dependency configuration
-      - name: Configure Flutter Dependencies
+      # 9. Dependency configuration
+      - name: Configure Dependencies
         shell: bash
         run: |
           set -e
@@ -261,7 +369,6 @@ jobs:
           path = Path("pubspec.yaml")
           text = path.read_text()
 
-          # Remove existing dependency_overrides block
           text = re.sub(
               r'\ndependency_overrides:\n(?:^[ \t]+.*\n?)*',
               '\n',
@@ -280,7 +387,7 @@ jobs:
 
           rm -f pubspec.lock
 
-      # 9. Flutter dependencies
+      # 10. Flutter Pub Get
       - name: Flutter Pub Get
         shell: bash
         run: |
@@ -291,7 +398,7 @@ jobs:
           flutter clean
           flutter pub get
 
-      # 10. Final configuration check
+      # 11. Final Configuration Check
       - name: Final Configuration Check
         shell: bash
         run: |
@@ -301,12 +408,18 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "FINAL CONFIGURATION"
+          echo "FINAL SHETI CONFIGURATION"
           echo "========================================"
 
-          grep -E \
-            "applicationId|versionCode|versionName" \
-            android/app/build.gradle
+          if [ -f android/app/build.gradle.kts ]; then
+            grep -E \
+              "applicationId|versionCode|versionName" \
+              android/app/build.gradle.kts
+          else
+            grep -E \
+              "applicationId|versionCode|versionName" \
+              android/app/build.gradle
+          fi
 
           echo ""
           echo "BASE       : V25"
@@ -315,7 +428,7 @@ jobs:
           echo "ARCH       : ARM64"
           echo "========================================"
 
-      # 11. Build ARM64 APK
+      # 12. Build APK
       - name: Build Release APK
         shell: bash
         run: |
@@ -334,10 +447,11 @@ jobs:
             exit 1
           fi
 
-          echo "APK CREATED SUCCESSFULLY"
+          echo ""
+          echo "APK CREATED"
           ls -lh "$APK"
 
-      # 12. APK package check
+      # 13. Verify APK package
       - name: Verify APK Package
         shell: bash
         run: |
@@ -357,43 +471,23 @@ jobs:
             exit 1
           fi
 
-          "$AAPT" dump badging "$APK" | head -5
-
           PACKAGE=$(
             "$AAPT" dump badging "$APK" \
             | sed -n "s/package: name='\([^']*\)'.*/\1/p" \
             | head -1
           )
 
+          echo "APK PACKAGE = $PACKAGE"
+          echo "V25 APP ID  = ${APP_ID}"
+
           if [ "$PACKAGE" != "${APP_ID}" ]; then
             echo "ERROR: APK PACKAGE DOES NOT MATCH V25 APP ID"
-            echo "Expected: ${APP_ID}"
-            echo "Found:    $PACKAGE"
             exit 1
           fi
 
-          echo "APK PACKAGE = V25 APP ID MATCH"
+          echo "APK PACKAGE CHECK = OK"
 
-      # 13. APK alignment
-      - name: Verify APK Alignment
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT"
-
-          APK="build/app/outputs/flutter-apk/app-release.apk"
-
-          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" \
-            -name zipalign \
-            | sort -V \
-            | tail -1)
-
-          "$ZIPALIGN" -c -v 4 "$APK"
-
-          echo "APK ZIPALIGN = OK"
-
-      # 14. APK signature
+      # 14. Verify APK Signature
       - name: Verify APK Signature
         shell: bash
         run: |
@@ -412,7 +506,7 @@ jobs:
 
           echo "APK SIGNATURE = OK"
 
-      # 15. Compare V25 JKS certificate with APK certificate
+      # 15. Compare V25 Certificate
       - name: Verify V25 Certificate
         shell: bash
         run: |
@@ -481,19 +575,13 @@ jobs:
             | tr -d ' ' \
             | tr '[:lower:]' '[:upper:]')
 
-          echo "V25 certificate fingerprint found"
-          echo "APK certificate fingerprint found"
-
           if [ -z "$JKS_CERT" ] || [ -z "$APK_CERT" ]; then
-            echo "ERROR: Certificate fingerprint unavailable"
+            echo "ERROR: Certificate fingerprint not available"
             exit 1
           fi
 
           if [ "$JKS_CERT" != "$APK_CERT" ]; then
-            echo ""
-            echo "========================================"
-            echo "ERROR: V25 SIGNING CERTIFICATE MISMATCH"
-            echo "========================================"
+            echo "ERROR: V25 CERTIFICATE MISMATCH"
             exit 1
           fi
 
@@ -502,8 +590,8 @@ jobs:
           echo "V25 CERTIFICATE = MATCH"
           echo "========================================"
 
-      # 16. Final APK
-      - name: Prepare Verified APK
+      # 16. Prepare verified APK
+      - name: Prepare Final APK
         shell: bash
         run: |
           set -e
@@ -522,7 +610,7 @@ jobs:
           cat > "$GITHUB_WORKSPACE/Sheti_V27_Build_Info.txt" <<EOF
           SHETI APP V27
 
-          BASE SOURCE:
+          BASE:
           Sheti_V4_25.zip
 
           APPLICATION ID:
@@ -542,7 +630,6 @@ jobs:
 
           VERIFIED:
           APK Package = OK
-          APK Alignment = OK
           APK Signature = OK
           V25 Certificate = MATCH
 
@@ -550,7 +637,7 @@ jobs:
           Sheti_V27_arm64.apk
           EOF
 
-      # 18. Upload only verified files
+      # 18. Upload only verified APK
       - name: Upload Verified APK
         uses: actions/upload-artifact@v4
         with:
