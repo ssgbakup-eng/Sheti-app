@@ -1,283 +1,411 @@
-name: Build Sheti APK from V25
+name: Sheti App V27 Build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-
-permissions:
-  contents: read
 
 jobs:
   build:
-    name: Build Sheti APK from V25
     runs-on: ubuntu-latest
 
     steps:
+
+      # 1. Checkout
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Extract V25 Source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP="Sheti_V4_25.zip"
-
-          if [ ! -f "$ZIP" ]; then
-            echo "ERROR: $ZIP not found"
-            exit 1
-          fi
-
-          rm -rf /tmp/sheti_v25
-          mkdir -p /tmp/sheti_v25
-
-          unzip -q "$ZIP" -d /tmp/sheti_v25
-
-          PUBSPEC="$(find /tmp/sheti_v25 -name pubspec.yaml -type f -print -quit)"
-
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml not found inside V25 ZIP"
-            exit 1
-          fi
-
-          V25_DIR="$(dirname "$PUBSPEC")"
-
-          echo "V25_DIR=$V25_DIR" >> "$GITHUB_ENV"
-
-          test -f "$V25_DIR/pubspec.yaml"
-          test -f "$V25_DIR/lib/main.dart"
-          test -f "$V25_DIR/signing/app_build.gradle"
-          test -f "$V25_DIR/signing/key.properties"
-          test -f "$V25_DIR/signing/sheti-release.jks"
-
-          echo "V25 source verified."
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
+      # 2. Flutter
       - name: Setup Flutter 3.35.2
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.2'
+          flutter-version: 3.35.2
           channel: stable
           cache: true
 
-      - name: Create Android Template Separately
+      # 3. V25 ZIP शोधून Extract
+      - name: Extract V25 Source
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          rm -rf /tmp/sheti_android_template
+          ZIP=$(find . -maxdepth 3 -type f -iname "Sheti_V4_25.zip" | head -1)
 
-          mkdir -p /tmp/sheti_android_template
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: Sheti_V4_25.zip not found"
+            exit 1
+          fi
 
-          cd /tmp/sheti_android_template
+          echo "V25 Source: $ZIP"
+
+          rm -rf sheti_v25
+          mkdir sheti_v25
+
+          unzip -q "$ZIP" -d sheti_v25
+
+          # ZIP मध्ये एक extra folder असल्यास तो शोधा
+          if [ -f "sheti_v25/pubspec.yaml" ]; then
+            PROJECT="sheti_v25"
+          else
+            PROJECT=$(find sheti_v25 -type f -name "pubspec.yaml" -printf '%h\n' | head -1)
+          fi
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: pubspec.yaml not found"
+            exit 1
+          fi
+
+          echo "PROJECT=$PROJECT" >> $GITHUB_ENV
+
+      # 4. V25 मध्ये Android Project तयार
+      - name: Create Android Project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT"
+
+          rm -rf android
 
           flutter create \
+            --no-pub \
             --platforms=android \
             --project-name sheti_app \
-            --org com.example \
+            --org com.sheti \
             .
 
           test -d android
-          test -f android/app/build.gradle
-          test -f android/settings.gradle
 
-          echo "Separate Android template created successfully."
+          echo "Android project created successfully"
 
-      - name: Copy Android Template Into V25
+      # 5. V25 Signing Files सुरक्षित ठेवणे
+      - name: Restore V25 Signing
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          rm -rf "$V25_DIR/android"
+          cd "$PROJECT"
 
-          cp -a /tmp/sheti_android_template/android "$V25_DIR/android"
-
-          test -d "$V25_DIR/android"
-          test -f "$V25_DIR/android/app/build.gradle"
-          test -f "$V25_DIR/android/settings.gradle"
-
-          echo "Android template copied into V25."
-
-      - name: Apply V25 Signing Configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p "$V25_DIR/android/signing"
-
-          cp "$V25_DIR/signing/key.properties" \
-             "$V25_DIR/android/signing/key.properties"
-
-          cp "$V25_DIR/signing/sheti-release.jks" \
-             "$V25_DIR/android/signing/sheti-release.jks"
-
-          cp "$V25_DIR/signing/app_build.gradle" \
-             "$V25_DIR/android/app/build.gradle"
-
-          echo "V25 signing files applied."
-
-      - name: Configure Flutter Gradle Plugin
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="$V25_DIR/android/app/build.gradle"
-
-          python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import sys
-
-          p = Path(sys.argv[1])
-          s = p.read_text()
-
-          if 'dev.flutter.flutter-gradle-plugin' not in s:
-              marker = 'id "org.jetbrains.kotlin.android"'
-
-              if marker in s:
-                  s = s.replace(
-                      marker,
-                      marker + '\n    id "dev.flutter.flutter-gradle-plugin"',
-                      1
-                  )
-              else:
-                  raise SystemExit(
-                      "ERROR: Kotlin Android plugin not found."
-                  )
-
-          if 'flutter {' not in s:
-              s += '\n\nflutter {\n    source = "../.."\n}\n'
-
-          p.write_text(s)
-
-          print("Flutter Gradle plugin configured.")
-          PY
-
-      - name: Configure Java 17 and Kotlin 17
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="$V25_DIR/android/app/build.gradle"
-
-          cat >> "$FILE" <<'EOF'
-
-          android {
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-          }
-          EOF
-
-          echo "Java/Kotlin 17 configured."
-
-      - name: Configure Audio Permission
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MANIFEST="$V25_DIR/android/app/src/main/AndroidManifest.xml"
-
-          if [ -f "$MANIFEST" ]; then
-            if ! grep -q "android.permission.RECORD_AUDIO" "$MANIFEST"; then
-              sed -i \
-                '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' \
-                "$MANIFEST"
-            fi
+          if [ ! -d "signing" ]; then
+            echo "ERROR: V25 signing folder not found"
+            exit 1
           fi
 
-      - name: Show V25 App Information
+          mkdir -p android/signing
+
+          cp -f signing/* android/signing/ 2>/dev/null || true
+
+          # दोन्ही ठिकाणी signing folder ठेवतो
+          cp -f signing/* android/ 2>/dev/null || true
+
+          echo "V25 signing files restored"
+
+      # 6. V25 App ID शोधणे
+      - name: Read V25 App Information
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          echo "===== V25 PUBSPEC VERSION ====="
-          grep -n "^version:" "$V25_DIR/pubspec.yaml" || true
+          cd "$PROJECT"
 
-          echo "===== V25 APP BUILD GRADLE ====="
-          grep -nE "applicationId|versionCode|versionName" \
-            "$V25_DIR/android/app/build.gradle" || true
+          APP_GRADLE="signing/app_build.gradle"
 
+          if [ ! -f "$APP_GRADLE" ]; then
+            echo "ERROR: signing/app_build.gradle not found"
+            exit 1
+          fi
+
+          APP_ID=$(grep -oE 'applicationId[[:space:]]+["'\''][^"'\'']+["'\'']' "$APP_GRADLE" \
+            | head -1 \
+            | sed -E 's/.*["'\'']([^"'\'']+)["'\''].*/\1/')
+
+          if [ -z "$APP_ID" ]; then
+            echo "ERROR: Application ID not found"
+            exit 1
+          fi
+
+          echo "APP_ID=$APP_ID" >> $GITHUB_ENV
+
+          echo "================================"
+          echo "V25 BASE"
+          echo "Application ID: $APP_ID"
+          echo "Target Version Code: 27"
+          echo "Target Version Name: 4.27.0"
+          echo "================================"
+
+      # 7. V25 Signing app_build.gradle वापरणे
+      - name: Apply V25 App Gradle
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT"
+
+          cp -f signing/app_build.gradle android/app/build.gradle
+
+          # Flutter Gradle plugin आवश्यक असल्यास जोडणे
+          if ! grep -q "dev.flutter.flutter-gradle-plugin" android/app/build.gradle; then
+            sed -i '1i plugins {\n    id "com.android.application"\n    id "org.jetbrains.kotlin.android"\n    id "dev.flutter.flutter-gradle-plugin"\n}\n' android/app/build.gradle
+          fi
+
+      # 8. Android Gradle Configuration
+      - name: Configure Android Gradle
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT"
+
+          cat > android/settings.gradle <<'EOF'
+pluginManagement {
+    def flutterSdkPath = {
+        def properties = new Properties()
+        file("local.properties").withInputStream { properties.load(it) }
+        def flutterSdkPath = properties.getProperty("flutter.sdk")
+        assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
+        return flutterSdkPath
+    }()
+
+    includeBuild("${flutterSdkPath}/packages/flutter_tools/gradle")
+
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+    id "com.android.application" version "8.7.3" apply false
+    id "org.jetbrains.kotlin.android" version "2.1.0" apply false
+}
+
+include ":app"
+EOF
+
+          cat > android/build.gradle <<'EOF'
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
+EOF
+
+          cat > android/gradle.properties <<'EOF'
+org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G -XX:+HeapDumpOnOutOfMemoryError
+android.useAndroidX=true
+android.enableJetifier=true
+EOF
+
+      # 9. Flutter block + Version 27
+      - name: Configure App Version
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/build.gradle")
+          s = p.read_text()
+
+          # Application ID
+          s = re.sub(
+              r'applicationId\s+["\'][^"\']+["\']',
+              'applicationId "' + "${APP_ID}" + '"',
+              s,
+              count=1
+          )
+
+          # Version Code
+          s = re.sub(
+              r'versionCode\s+[^\n]+',
+              'versionCode 27',
+              s,
+              count=1
+          )
+
+          # Version Name
+          s = re.sub(
+              r'versionName\s+[^\n]+',
+              'versionName "4.27.0"',
+              s,
+              count=1
+          )
+
+          # Flutter block
+          if "flutter {" not in s:
+              s += '''
+
+flutter {
+    source = "../.."
+}
+'''
+
+          p.write_text(s)
+          PY
+
+          echo "Version Code = 27"
+          echo "Version Name = 4.27.0"
+
+      # 10. Image dependency fix
+      - name: Fix Flutter Image Dependency
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("pubspec.yaml")
+          s = p.read_text()
+
+          # जुना dependency_overrides block काढा
+          s = re.sub(
+              r'\ndependency_overrides:\n(?:^[ \t]+.*\n?)*',
+              '\n',
+              s,
+              flags=re.MULTILINE
+          )
+
+          s = s.rstrip() + '''
+
+dependency_overrides:
+  image: 4.11.1
+'''
+
+          p.write_text(s)
+          PY
+
+          rm -f pubspec.lock
+
+      # 11. Dependencies
       - name: Flutter Pub Get
         shell: bash
-        working-directory: ${{ env.V25_DIR }}
         run: |
-          set -euo pipefail
+          set -e
+
+          cd "$PROJECT"
 
           flutter clean
           flutter pub get
 
-      - name: Build V25 APK
+      # 12. App ID / Version अंतिम तपासणी
+      - name: Verify App Information
         shell: bash
-        working-directory: ${{ env.V25_DIR }}
         run: |
-          set -euo pipefail
+          set -e
+
+          cd "$PROJECT"
+
+          echo ""
+          echo "========================================"
+          echo "FINAL APP INFORMATION"
+          echo "========================================"
+
+          grep -E "applicationId|versionCode|versionName" \
+            android/app/build.gradle || true
+
+          echo "========================================"
+
+      # 13. APK Build
+      - name: Build V27 APK
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT"
 
           flutter build apk \
             --release \
             --target-platform android-arm64
 
-      - name: Verify APK
+      # 14. APK Rename
+      - name: Rename APK
         shell: bash
-        working-directory: ${{ env.V25_DIR }}
         run: |
-          set -euo pipefail
+          set -e
 
-          APK="build/app/outputs/flutter-apk/app-release.apk"
+          cd "$PROJECT"
 
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: APK was not created."
-            exit 1
-          fi
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "$GITHUB_WORKSPACE/Sheti_V27_Update.apk"
 
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          ls -lh "$GITHUB_WORKSPACE/Sheti_V27_Update.apk"
 
-          APKSIGNER="$(find "$SDK_ROOT/build-tools" \
-            -name apksigner -type f 2>/dev/null \
-            | sort -V | tail -n 1 || true)"
+      # 15. APK Signature Check
+      - name: Verify APK Signature
+        shell: bash
+        run: |
+          set -e
 
-          AAPT="$(find "$SDK_ROOT/build-tools" \
-            -name aapt -type f 2>/dev/null \
-            | sort -V | tail -n 1 || true)"
+          APK="$GITHUB_WORKSPACE/Sheti_V27_Update.apk"
 
-          if [ -z "$APKSIGNER" ] || [ -z "$AAPT" ]; then
-            echo "ERROR: Android verification tools not found."
-            exit 1
-          fi
+          echo "========================================"
+          echo "APK SIGNATURE CHECK"
+          echo "========================================"
 
-          "$APKSIGNER" verify --verbose "$APK"
+          $ANDROID_HOME/build-tools/35.0.0/apksigner verify \
+            --verbose \
+            "$APK"
 
-          BADGING="$("$AAPT" dump badging "$APK")"
+          echo "APK signature verification PASSED"
 
-          echo "$BADGING" | grep "^package:"
+      # 16. Final Information
+      - name: Create Build Information
+        shell: bash
+        run: |
+          cat > "$GITHUB_WORKSPACE/Sheti_V27_Build_Info.txt" <<EOF
+          SHETI APP V27
 
-          echo "===== APK INFO ====="
-          echo "$BADGING" | grep "^package:"
+          BASE SOURCE:
+          Sheti_V4_25.zip
 
-          mkdir -p release
+          APPLICATION ID:
+          ${APP_ID}
 
-          cp "$APK" release/Sheti_V25_Update.apk
+          VERSION CODE:
+          27
 
-          sha256sum release/Sheti_V25_Update.apk \
-            > release/SHA256SUMS.txt
+          VERSION NAME:
+          4.27.0
 
-          echo "APK verification successful."
+          SIGNING:
+          V25 signing folder used
 
-      - name: Upload APK
+          APK:
+          Sheti_V27_Update.apk
+
+          UPDATE:
+          Same Application ID + V25 signing key
+          Version Code increased to 27
+          EOF
+
+      # 17. Upload APK
+      - name: Upload V27 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sheti-V25-Update-APK
-          path: release/*
-          if-no-files-found: error
-          retention-days: 14
+          name: Sheti-V27-APK
+          path: |
+            Sheti_V27_Update.apk
+            Sheti_V27_Build_Info.txt
